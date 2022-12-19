@@ -36,15 +36,15 @@ public class TspSolverApplication implements CommandLineRunner {
         final int n = dist.n;
 
         final double[][] distances = dist.distances;
-        final int[][] path = new int[n][ts];
+        final int[][] path = new int[ts][n];
         final double[] sum = new double[ts];
-        final int[][] path2 = new int[n][ts];
-        final int[][] gaResult = new int[n][ts];
+        final int[][] path2 = new int[ts][n];
+        final int[][] gaResult = new int[ts][n];
         final double[] gaResultSum = new double[ts];
 
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < ts; j++) {
-                path[i][j] = (i + j) % n;
+                path[j][i] = (i + j) % n;
             }
         }
 
@@ -112,7 +112,7 @@ public class TspSolverApplication implements CommandLineRunner {
 
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < ts; j++) {
-                path2[i][j] = path[i][j];
+                path2[j][i] = path[j][i];
             }
         }
         List<Integer> listToParallel = new ArrayList<>(size);
@@ -144,7 +144,7 @@ public class TspSolverApplication implements CommandLineRunner {
 
                 for (int i = 0; i < n; i++) {
                     for (int k = 0; k < pm; k++) {
-                        path[i][4 * j + k] = path2[i][distinct.get(sequence.get(selectorList.get(k)))];
+                        path[4 * j + k][i] = path2[distinct.get(sequence.get(selectorList.get(k)))][i];
                     }
                 }
             });}).get();

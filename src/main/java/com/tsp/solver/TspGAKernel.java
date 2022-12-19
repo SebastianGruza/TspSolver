@@ -31,7 +31,7 @@ class TspGAKernel extends Kernel {
         this.gaResultSum = gaResultSum;
         this.gaResult = gaResult;
         this.epochs = epochs;
-        this.existedVertices = new int[n][size * pm];
+        this.existedVertices = new int[size * pm][n];
         int maxThreads = size;
 
         states = new int[SEED_SIZE * maxThreads];
@@ -89,9 +89,9 @@ class TspGAKernel extends Kernel {
             int rnd1 = (int) (numRandom1 * (n - 2));
             int rnd2 = (int) ((this.n - rnd1 - 1) * numRandom2) + rnd1;
 
-            int zamien = gaResult[rnd1][parent];
-            gaResult[rnd1][parent] = gaResult[rnd2][parent];
-            gaResult[rnd2][parent] = zamien;
+            int zamien = gaResult[parent][rnd1];
+            gaResult[parent][rnd1] = gaResult[parent][rnd2];
+            gaResult[parent][rnd2] = zamien;
 
         }
     }
@@ -106,18 +106,18 @@ class TspGAKernel extends Kernel {
             int q1 = Next(p1);
             int p2 = (int) (numRandom2 * (n - 1));
             if (p2 != p1 && p2 != q1) {
-                int temp = gaResult[q1][parent];
-                gaResult[q1][parent] = gaResult[p2][parent];
+                int temp = gaResult[parent][q1];
+                gaResult[parent][q1] = gaResult[parent][p2];
                 int check = 1;
                 for (int i = 0; i < size; i++) {
-                    if (gaResult[Previous(p2)][parent] != temp && check == 1) {
-                        gaResult[p2][parent] = gaResult[Previous(p2)][parent];
+                    if (gaResult[parent][Previous(p2)]!= temp && check == 1) {
+                        gaResult[parent][p2] = gaResult[parent][Previous(p2)];
                         p2 = Previous(p2);
                     } else {
                         check = 0;
                     }
                 }
-                gaResult[p2][parent] = temp;
+                gaResult[parent][p2] = temp;
             }
         }
     }
@@ -159,7 +159,7 @@ class TspGAKernel extends Kernel {
 
         int k = cutPoint + cutSize;
         for (int i = 0; i < n; i++) {
-            existedVertices[i][parent1] = 0;
+            existedVertices[parent1][i] = 0;
         }
 
         for (int i = cutPoint + cutSize; i < n; i++) {
@@ -171,9 +171,9 @@ class TspGAKernel extends Kernel {
 //                        }
 //                    }
             //if (exist == 0) {
-            if (existedVertices[path[i][parent2]][parent1] == 0) {
-                gaResult[k][parent1] = path[i][parent2];
-                existedVertices[path[i][parent2]][parent1] = 1;
+            if (existedVertices[parent1][path[parent2][i]] == 0) {
+                gaResult[parent1][k] = path[parent2][i];
+                existedVertices[parent1] [path[parent2][i]]= 1;
                 k++;
                 if (k == n)
                     k = 0;
@@ -188,9 +188,9 @@ class TspGAKernel extends Kernel {
 //                            //break;
 //                        }
 //                    }
-            if (existedVertices[path[i][parent2]][parent1] == 0) {
-                gaResult[k][parent1] = path[i][parent2];
-                existedVertices[path[i][parent2]][parent1] = 1;
+            if (existedVertices[parent1][path[parent2][i]] == 0) {
+                gaResult[parent1][k] = path[parent2][i];
+                existedVertices[parent1][path[parent2][i]] = 1;
                 k++;
                 if (k == n)
                     k = 0;
@@ -213,14 +213,14 @@ class TspGAKernel extends Kernel {
             for (int vertex1 = 0; vertex1 < n; vertex1++) {
                 if (isInverse == 1) {
                     int vertex2 = (n - 1) - ((vertex1 + intRandom) % n);
-                    gaResult[vertex1][noPath] = path[vertex2][noPath];
+                    gaResult[noPath][vertex1] = path[noPath][vertex2];
                 } else {
                     int vertex2 = (vertex1 + intRandom) % n;
-                    gaResult[vertex1][noPath] = path[vertex2][noPath];
+                    gaResult[noPath][vertex1] = path[noPath][vertex2];
                 }
             }
             for (int vertex = 0; vertex < n; vertex++) {
-                path[vertex][noPath] = gaResult[vertex][noPath];
+                path[noPath][vertex] = gaResult[noPath][vertex];
             }
         }
     }
@@ -232,11 +232,11 @@ class TspGAKernel extends Kernel {
             pathSum[noPath] = 0;
             gaResultSum[noPath] = 0;
             for (int index = 0; index < n - 1; index++) {
-                pathSum[noPath] += distances[path[index][noPath]][path[index + 1][noPath]];
-                gaResultSum[noPath] += distances[gaResult[index][noPath]][gaResult[index + 1][noPath]];
+                pathSum[noPath] += distances[path[noPath][index]][path[noPath][index + 1]];
+                gaResultSum[noPath] += distances[gaResult[noPath][index]][gaResult[noPath][index + 1]];
             }
-            pathSum[noPath] += distances[path[0][noPath]][path[n - 1][noPath]];
-            gaResultSum[noPath] += distances[gaResult[0][noPath]][gaResult[n - 1][noPath]];
+            pathSum[noPath] += distances[path[noPath][0]][path[noPath][n - 1]];
+            gaResultSum[noPath] += distances[gaResult[noPath][0]][gaResult[noPath][n - 1]];
         }
     }
 
@@ -256,7 +256,7 @@ class TspGAKernel extends Kernel {
             }
             if (pathSum[noPath] > gaResultSum[noPath] && sumToSelect == 0) {
                 for (int index = 0; index < n; index++) {
-                    path[index][noPath] = gaResult[index][noPath];
+                    path[noPath][index] = gaResult[noPath][index];
                 }
                 pathSum[noPath] = gaResultSum[noPath];
             }

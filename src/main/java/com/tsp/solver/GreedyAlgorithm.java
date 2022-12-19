@@ -13,7 +13,7 @@ public class GreedyAlgorithm {
             cityVisited.add(noPath);
             double best;
             int numberBest = noPath;
-            path[0][noPath] = numberBest;
+            path[noPath][0] = numberBest;
             for (int cityNumber = 1; cityNumber < distances.length; cityNumber++) {
                 int previousBest = numberBest;
                 best = Double.MAX_VALUE;
@@ -27,13 +27,13 @@ public class GreedyAlgorithm {
                     }
                 }
                 cityVisited.add(numberBest);
-                path[cityNumber][noPath] = numberBest;
+                path[noPath][cityNumber] = numberBest;
             }
             System.out.println("Number path: " + noPath);
         }
         for (int noPath = start + number; noPath < ts ; noPath++) {
             for (int numer = 0; numer < distances.length; numer++) {
-                path[numer][noPath] = path[numer][noPath % number];
+                path[noPath][numer] = path[noPath % number][numer];
             }
             System.out.println("Number path: " + noPath);
         }
