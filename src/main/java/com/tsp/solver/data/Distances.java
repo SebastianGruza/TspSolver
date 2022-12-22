@@ -5,6 +5,7 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 public class Distances {
     public final int n;
@@ -39,6 +40,25 @@ public class Distances {
             }
         }
     }
+
+    public Distances(int n) {
+        Random rndGen = new Random();
+        this.n = n;
+        this.distances = new double[this.n][this.n];
+        this.filename = "Random n=" + n;
+        Double[][] coord = new Double[2][n];
+        for (int i = 0; i < 2; i++) {
+            for (int j = 0; j < n; j++) {
+                coord[i][j] = rndGen.nextDouble() * 100;
+            }
+        }
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                distances[i][j] = Math.sqrt(Math.pow(coord[0][i] - coord[0][j], 2) + Math.pow(coord[1][i] - coord[0][1], 2));
+            }
+        }
+    }
+
 
     private static List<String> LoadFromFile(String filename) {
         BufferedReader reader;

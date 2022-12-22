@@ -6,6 +6,10 @@ import java.util.Objects;
 public class Path {
     private double total;
 
+    public Double getTotal() {
+        return total;
+    }
+
     public Path(double total) {
         this.total = total;
     }

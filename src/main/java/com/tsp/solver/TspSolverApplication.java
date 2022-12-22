@@ -1,7 +1,7 @@
 package com.tsp.solver;
 
-import com.aparapi.Kernel;
 import com.aparapi.Range;
+import com.tsp.solver.data.Colony;
 import com.tsp.solver.data.Distances;
 import com.tsp.solver.data.Path;
 import org.springframework.boot.CommandLineRunner;
@@ -29,7 +29,7 @@ public class TspSolverApplication implements CommandLineRunner {
     public void run(String... args) throws InterruptedException {
 
 
-        final int size = 1024; // 4096 active cores
+        final int size = 16384; // 4096 active cores
         final int pm = 4; //path multiplier
         final int ts = size * pm; //total size
         Distances dist = new Distances("full.txd");
@@ -39,6 +39,9 @@ public class TspSolverApplication implements CommandLineRunner {
         final int[][] path = new int[ts][n];
         final double[] sum = new double[ts];
         final int[][] path2 = new int[ts][n];
+        final double[] sum2 = new double[ts];
+        final int[][] path3 = new int[ts][n];
+        final double[] sum3 = new double[ts];
         final int[][] gaResult = new int[ts][n];
         final double[] gaResultSum = new double[ts];
 
@@ -48,108 +51,168 @@ public class TspSolverApplication implements CommandLineRunner {
             }
         }
 
-        Instant start;
         System.out.println("START");
-        GreedyAlgorithm.CreateNewGenerationWithGreedyAlgorithm(n/10, 1, distances, path, ts);
+        Instant start = Instant.now();
+        GreedyAlgorithm.CreateNewGenerationWithGreedyAlgorithm(n, 1, distances, path, ts);
         System.out.println("GreedyAlgorithm check");
         Random rndGen = new Random();
         int epochsInGPU = 10;
-        int epochsInMain = 100;
+        int epochsInMain = 100000;
+        Colony oldResults = new Colony();
         for (int epoch = 1; epoch < epochsInMain; epoch++) {
             System.out.println("Start epoch " + epoch);
-            start = Instant.now();
-            TspGAKernel kernelGPU = new TspGAKernel(sum, path, gaResultSum, gaResult, distances, size, n, pm, epochsInGPU);
+            Instant startEpoch = Instant.now();
+            copyPathsIntoOtherTable(ts, n, path, sum, sum3, path3);
+            int[] isFaultIntegrity = new int[ts];
+            TspGAKernel kernelGPU = new TspGAKernel(sum, path, gaResultSum, gaResult, distances, size, n, pm, epochsInGPU, isFaultIntegrity);
+            //kernelGPU.setExecutionMode(Kernel.EXECUTION_MODE.JTP);
             kernelGPU.execute(Range.create(size));
             kernelGPU.dispose();
+            checkIntegrityAndRepair(ts, n, path, sum, rndGen, isFaultIntegrity);
             Instant end = Instant.now();
             Duration timeElapsed = Duration.between(start, end);
-            System.out.println("Time taken epochsInGPU = " + epochsInGPU + " on GPU: " + timeElapsed.toMillis() + " milliseconds");
-            System.out.println("End GPU calculation");
+            Duration timeElapsedEpoch = Duration.between(startEpoch, end);
+            System.out.println("Time taken epochsInGPU = " + epochsInGPU + " on GPU: " + timeElapsedEpoch.toMillis() + " milliseconds,");
+            System.out.println("Total: " + timeElapsed.toSeconds() + " seconds");
+            System.out.println("End GPU calculation ");
 
-            int epochsInCPU = epochsInGPU;
-            start = Instant.now();
-            TspGAKernel kernelCPU = new TspGAKernel(sum, path, gaResultSum, gaResult, distances, size, n, pm, epochsInCPU);
-            kernelCPU.setExecutionMode(Kernel.EXECUTION_MODE.JTP);
-            kernelCPU.execute(Range.create(size));
-            kernelCPU.dispose();
-            end = Instant.now();
-            timeElapsed = Duration.between(start, end);
-            System.out.println("Time taken epochsInCPU = " + epochsInCPU + " on CPU: " + timeElapsed.toMillis() + " milliseconds");
+            Integer threshold = (int) (ts / 8.0 / Math.log(epoch + 1));
+            System.out.println("Threshold to repeat with actual data = " + threshold);
 
+            Colony results = postEpochProcessing(ts, path, sum, epoch);
+            copyPathsIntoOtherTable(ts, n, path, sum, sum2, path2);
+            createNextGeneration(size, pm, ts, n, path, rndGen, results);
+            if (oldResults.getIndividuals().size() + results.getIndividuals().size() < threshold) {
+                copyPathsIntoOtherTable(ts, n, path3, sum3, sum, path);
+                oldResults = new Colony(results, oldResults);
+                System.out.println("--> Repeat calculation, unique = " + oldResults.getIndividuals().size());
+            } else {
+                oldResults = new Colony(results, oldResults);
+                if (oldResults.getIndividuals().size() < threshold) {
+                    copyPathsIntoOtherTable(ts, n, path3, sum3, sum, path);
+                    System.out.println("--> Repeat calculation, unique = " + oldResults.getIndividuals().size());
+                } else {
+                    System.out.println("--> Calculation with unique " + oldResults.getIndividuals().size());
+                    //prepare  table path base on results:
+                    if (results.getIndividuals().size() < oldResults.getIndividuals().size()) {
+                        System.out.println("--> Preparing table based all unique results");
+                        copyPathsIntoOtherTable(ts, n, path, sum, sum2, path2);
+                        createNextGeneration(size, pm, ts, n, path, rndGen, oldResults);
+                    }
+                    oldResults = new Colony();
+                }
+            }
 
-            processingAfterGPU(size, pm, ts, n, path, sum, path2, rndGen, epoch);
             System.out.println("End CPU calculation");
         }
     }
 
-    private static void processingAfterGPU(int size, int pm, int ts, int n, int[][] path, double[] sum, int[][] path2, Random rndGen, int epoch) throws InterruptedException {
-        Map<Path, Integer> distinct = new HashMap<>();
-
-        double total = 0.0;
-        for (int i = 0; i < ts; i++) {
-            total += sum[i] / ts;
-            distinct.put(new Path(sum[i]), i);
+    private void checkIntegrityAndRepair(int ts, int n, int[][] path, double[] sum, Random rndGen, int[] isFaultIntegrity) {
+        Integer faultIntegrity = Arrays.stream(isFaultIntegrity).sum();
+        if (faultIntegrity > 0) {
+            System.out.println("----> ERROR CHECKING CORRECTION, integrity fault detected in " + faultIntegrity);
+            for (int i = 0; i < isFaultIntegrity.length; i++) {
+                if (isFaultIntegrity[i] > 0) {
+                    Integer rnd;
+                    do {
+                        rnd = rndGen.nextInt(ts);
+                    } while (isFaultIntegrity[rnd] > 0);
+                    for (int j = 0; j < n; j++) {
+                        path[i][j] = path[rnd][j];
+                    }
+                    sum[i] = sum[rnd];
+                }
+            }
         }
+    }
+
+    private static Colony postEpochProcessing(int ts, int[][] path, double[] sum, int epoch) {
+        Map<Path, int[]> distinct = getDistinctPathWithIndex(ts, sum, path, epoch);
         int[] sortedIndices = IntStream.range(0, sum.length)
                 .boxed().sorted((i, j) -> (sum[i] < sum[j]) ? -1 : (sum[i] > sum[j]) ? 1 : 0)
                 .mapToInt(ele -> ele).toArray();
 
-        System.out.println("Mean in " + epoch + ": " + total);
         System.out.println("Best    =  " + sum[sortedIndices[0]]);
         System.out.println("Worst   =  " + sum[sortedIndices[ts - 1]]);
-        System.out.println("Unique=  " + distinct.size());
-
+        System.out.println("Unique  =  " + distinct.size());
 
         double best = sum[sortedIndices[0]];
         double worst = sum[sortedIndices[ts - 1]];
         Arrays.sort(sum);
-        Map<Path, Double> probability = new HashMap<>();
-        for (int i = 0; i < ts; i++) {
-            Double actualWeight = Math.pow((worst - sum[i]) / (worst - best) + 0.5, 3);
-            probability.put(new Path(sum[i]), actualWeight);
-        }
-        List<Path> sequence = probability.entrySet().stream().sorted((a, b) -> b.getValue().compareTo(a.getValue())).map(a -> a.getKey()).collect(Collectors.toList());
+        return new Colony(distinct, best, worst);
+    }
 
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < ts; j++) {
-                path2[j][i] = path[j][i];
-            }
+    private static Map<Path, int[]> getDistinctPathWithIndex(int ts, double[] sum, int[][] path, int epoch) {
+        Map<Path, int[]> distinct = new HashMap<>();
+        double total = 0.0;
+        for (int i = 0; i < ts; i++) {
+            total += sum[i] / ts;
+            distinct.put(new Path(sum[i]), path[i]);
         }
+        System.out.println("Epoch   =  " + epoch);
+        System.out.println("Mean    =  " + total);
+        return distinct;
+    }
+
+    private static void createNextGeneration(int size, int pm, int ts, int n, int[][] path, Random rndGen, Colony colony) throws InterruptedException {
+        List<Path> sequence = colony.getIndividuals().keySet().stream().sorted(Comparator.comparing(Path::getTotal)).collect(Collectors.toList());
+        Double best = sequence.get(0).getTotal();
+        Double worst = sequence.get(sequence.size() - 1).getTotal();
         List<Integer> listToParallel = new ArrayList<>(size);
         for (Integer j = 0; j < size; j++) {
             listToParallel.add(j);
         }
 
+        Integer scalePower = 400;
+        Double power = Math.log(((sequence.size() / ts + 1.0) * (worst / best) - 1) * scalePower + 1) + 1;
+        System.out.println("Actual power = " + power);
+
         ForkJoinPool newCustomThreadPool = new ForkJoinPool(24);
         try {
             newCustomThreadPool.submit(
                     () -> {
-            listToParallel.parallelStream().forEach((j)->{
-                List<Integer> selectorList = new ArrayList<>(pm);
-                for (int k = 0; k < pm; k++) {
-                    Integer seqSize = sequence.size();
-                    Double toCalculate = rndGen.nextDouble();
-                    int selector = (int) (Math.pow(toCalculate, 4) * (seqSize - 2));
-                    selectorList.add(selector);
-                }
-                selectorList = selectorList.stream().sorted().distinct().collect(Collectors.toList());
-                while (selectorList.size() < pm) {
-                    Integer last = selectorList.get(selectorList.size() - 1);
-                    if (last < sequence.size()) {
-                        selectorList.add(last + 1);
-                    } else {
-                        selectorList.add(last - 1);
-                    }
-                }
-
-                for (int i = 0; i < n; i++) {
-                    for (int k = 0; k < pm; k++) {
-                        path[4 * j + k][i] = path2[distinct.get(sequence.get(selectorList.get(k)))][i];
-                    }
-                }
-            });}).get();
+                        listToParallel.parallelStream().forEach((j) -> {
+                            List<Integer> selectorList = new ArrayList<>(pm);
+                            Integer seqSize = sequence.size();
+                            for (int k = 0; k < pm; k++) {
+                                Double toCalculate = rndGen.nextDouble();
+                                int selector = (int) (Math.pow(toCalculate, power) * (seqSize - 2));
+                                selectorList.add(selector);
+                            }
+                            selectorList = selectorList.stream().sorted().distinct().collect(Collectors.toList());
+                            if (seqSize < pm) {
+                                System.out.println("WARNING: Unique size below than pm=" + pm);
+                                while (selectorList.size() < pm) {
+                                    selectorList.add(0);
+                                }
+                            }
+                            while (selectorList.size() < pm) {
+                                Double toCalculate = rndGen.nextDouble();
+                                int selector = (int) (Math.pow(toCalculate, power) * (seqSize - 2));
+                                selectorList.add(selector);
+                                selectorList = selectorList.stream().sorted().distinct().collect(Collectors.toList());
+                            }
+                            for (int k = 0; k < pm; k++) {
+                                int[] onePath = colony.getIndividuals().get(sequence.get(selectorList.get(k)));
+                                for (int i = 0; i < n; i++) {
+                                    path[4 * j + k][i] = onePath[i];
+                                }
+                            }
+                        });
+                    }).get();
         } catch (ExecutionException e) {
             e.printStackTrace();
+        }
+    }
+
+    private static void copyPathsIntoOtherTable(int ts, int n, int[][] path, double[] sum, double[] sum2, int[][] path2) {
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < ts; j++) {
+                path2[j][i] = path[j][i];
+            }
+        }
+        for (int j = 0; j < ts; j++) {
+            sum2[j] = sum[j];
         }
     }
 }
