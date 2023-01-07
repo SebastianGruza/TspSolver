@@ -115,9 +115,8 @@ class TspGAKernel extends Kernel {
         for (int el = 0; el < pm; el++) {
             int parent = pm * gid + el;
             float numRandom1 = random01();
-            float numRandom2 = random01();
             int rnd1 = (int) (numRandom1 * (n - 2));
-            int rnd2 = (int) ((this.n - rnd1 - 1) * numRandom2) + rnd1;
+            int rnd2 = getBestRandomVertex(gaResult[parent], rnd1, n/50);
 
             int zamien = gaResult[parent][rnd1];
             gaResult[parent][rnd1] = gaResult[parent][rnd2];
@@ -133,7 +132,7 @@ class TspGAKernel extends Kernel {
             float numRandom2 = random01();
             int p1 = (int) (numRandom1 * (n - 1));
             int q1 = Next(p1);
-            int p2 = (int) (numRandom2 * (n - 1));
+            int p2 = getBestRandomVertex(gaResult[parent], p1, n/50);
             if (p2 != p1 && p2 != q1) {
                 int temp = gaResult[parent][q1];
                 gaResult[parent][q1] = gaResult[parent][p2];
@@ -158,9 +157,8 @@ class TspGAKernel extends Kernel {
                 existedVertices[parent][0] = 0;
             }
             float numRandom1 = random01();
-            float numRandom2 = random01();
             int rnd1 = (int) (numRandom1 * (n - 2));
-            int rnd2 = (int) (numRandom2 * (n - 2));
+            int rnd2 = getBestRandomVertex(gaResult[parent], rnd1, n/50);
 
             if  (rnd1 != rnd2 ) {
                 int check = 0;
@@ -182,22 +180,41 @@ class TspGAKernel extends Kernel {
         }
     }
 
+    private int getBestRandomVertex(int[] ints, int rnd1, int counter) {
+        int vertex1 = ints[rnd1];
+        int rnd2 = Next(rnd1);
+        int bestRnd2  = rnd2;
+        double best = Double.MAX_VALUE;
+        for (int i = 0; i < counter; i++) {
+            float numRandom2 = random01();
+            rnd2 = (int) (numRandom2 * (n - 2));
+            int vertex2 = ints[rnd2];
+            double actualBest = distances[vertex1][vertex2];
+            if (actualBest < best && rnd1 != rnd2) {
+                best = actualBest;
+                bestRnd2 = rnd2;
+            }
+        }
+        rnd2 = bestRnd2;
+        return rnd2;
+    }
+
     private int Next(int actual) {
         return (actual == this.n - 1 ? 0 : actual + 1);
     }
 
-    int Previous(int actual) {
+    private int Previous(int actual) {
         return (actual == 0 ? this.n - 1 : actual - 1);
     }
 
 
     private void calculateCrossoverFor4(int gid, int epoch) {
         if (epoch % 3 == 0) {
-            crossover(gid, 0, 1);
             crossover(gid, 2, 3);
+            crossover(gid, 0, 1);
         } else if (epoch % 3 == 1) {
-            crossover(gid, 0, 2);
             crossover(gid, 1, 3);
+            crossover(gid, 0, 2);
         } else {
             crossover(gid, 0, 3);
             crossover(gid, 1, 2);
@@ -269,7 +286,6 @@ class TspGAKernel extends Kernel {
 
     private void randomShift(int gid) {
         //step: random shift:
-        //TODO: to fix
         for (int el = 0; el < pm; el++) {
             float numRandom = random01();
             int intRandom = (int) (numRandom * 0.9 * n);

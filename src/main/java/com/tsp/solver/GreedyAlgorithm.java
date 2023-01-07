@@ -5,9 +5,9 @@ import java.util.Set;
 
 public class GreedyAlgorithm {
 
-    public static void CreateNewGenerationWithGreedyAlgorithm(int number, int noThread, double[][] distances, int[][] path, int ts) {
+    public static void CreateNewGenerationWithGreedyAlgorithm(int number, int noThread, double[][] distances, int[][] path2, int ts) {
         int start = 0; //number * noThread;
-
+        int[][] path = new int[distances.length][distances.length];
         for (int noPath = start; noPath < start + number; noPath++) {
             Set<Integer> cityVisited = new HashSet<>();
             cityVisited.add(noPath);
@@ -31,9 +31,9 @@ public class GreedyAlgorithm {
             }
             System.out.println("Number path: " + noPath);
         }
-        for (int noPath = start + number; noPath < ts ; noPath++) {
+        for (int noPath = 0; noPath < ts; noPath++) {
             for (int numer = 0; numer < distances.length; numer++) {
-                path[noPath][numer] = path[noPath % number][numer];
+                path2[noPath][numer] = path[(noPath / (ts / number)) % number][numer];
             }
             System.out.println("Number path: " + noPath);
         }

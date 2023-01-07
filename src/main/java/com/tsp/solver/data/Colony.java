@@ -41,4 +41,8 @@ public class Colony {
         this.best = colonyFirst.getBest() > colonySecond.getBest() ? colonySecond.getBest() : colonyFirst.getBest();
         this.worst = colonyFirst.getWorst() < colonySecond.getWorst() ? colonySecond.getWorst() : colonyFirst.getWorst();
     }
+
+    public void setIndividuals(Map<Path, int[]> individuals) {
+        this.individuals = individuals;
+    }
 }
