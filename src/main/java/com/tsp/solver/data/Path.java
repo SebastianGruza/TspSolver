@@ -19,7 +19,7 @@ public class Path {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         Path path = (Path) o;
-        return path.total >= total - 0.000001 && path.total <= total + 0.000001;
+        return path.total >= total - 0.0000001 && path.total <= total + 0.0000001;
     }
 
     @Override

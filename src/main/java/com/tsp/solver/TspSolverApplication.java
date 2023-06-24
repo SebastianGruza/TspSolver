@@ -1,5 +1,6 @@
 package com.tsp.solver;
 
+import com.aparapi.Kernel;
 import com.aparapi.Range;
 import com.tsp.solver.data.Colony;
 import com.tsp.solver.data.Distances;
@@ -27,11 +28,26 @@ public class TspSolverApplication implements CommandLineRunner {
     @Override
     public void run(String... args) throws InterruptedException {
 
+        Integer counterTotal = 0;
+        while (true) {
+            start();
+            System.out.println();
+            System.out.println("END counterTotal number " + counterTotal++);
+            System.out.println();
+        }
+    }
+
+    public void start() throws InterruptedException {
 
         final int size = 16384; // 4096 active cores
-        final int pm = 4; //path multiplier
-        final int ts = size * pm; //total size
+        final int sizeTabu = 131072;
+        final int pm = 4; //path multiplier - how many paths per thread
+        final int ts = size * pm; //total size of paths
         Distances dist = new Distances("full.txd");
+        //Alternatives:
+        //Distances dist = new Distances("gr9882.tsp", 7);
+        //Distances dist = new Distances("Dane_TSP_48.csv", 48);
+        //Distances dist = new Distances(37);
         final int n = dist.n;
 
         final double[][] distances = dist.distances;
@@ -52,16 +68,23 @@ public class TspSolverApplication implements CommandLineRunner {
 
         System.out.println("START");
         Instant start = Instant.now();
-        GreedyAlgorithm.CreateNewGenerationWithGreedyAlgorithm(n, 1, distances, path, ts);
+        Instant startEpoch = Instant.now();
+        GreedyAlgorithm.CreateNewGenerationWithGreedyAlgorithm(n/10, 1, distances, path, ts);
         System.out.println("GreedyAlgorithm check");
         Random rndGen = new Random();
-        int epochsInGPU = 10;
+        int epochsInGPU = 3;
         int epochsInMain = 100000;
         int colonyMultiplier = 16;
-        int bestsHistoricalCounter = 512;
-        Set<Path> allPaths = new HashSet<>();
+        int bestsHistoricalCounter = size / 8;
+        List<Set<Path>> allPaths = new ArrayList<>();
+        for (int i = 0; i < colonyMultiplier; i++) {
+            allPaths.add(new HashSet<>());
+        }
         Integer counterMerge = 0;
+        Integer counterTotalMerge = 0;
+        Boolean onlyMutate = true;
         List<Map<Path, int[]>> bestsHistorical = new ArrayList<>();
+        Map<Path, Integer> countingToTabu = new HashMap<>();
         List<Colony> oldResults = new ArrayList<>(colonyMultiplier);
         for (int i = 0; i < colonyMultiplier; i++) {
             oldResults.add(new Colony());
@@ -70,21 +93,56 @@ public class TspSolverApplication implements CommandLineRunner {
 
 
         for (int epoch = 1; epoch < epochsInMain; epoch++) {
+            if (epoch > 10) {
+                onlyMutate = false;
+            }
+            if (counterTotalMerge >= 100) {
+                break;
+            }
             System.out.println("Start epoch " + epoch);
-            Instant startEpoch = Instant.now();
+
             copyPathsIntoOtherTable(ts, n, path, sum, sum3, path3);
             int[] isFaultIntegrity = new int[ts];
-            TspGAKernel kernelGPU = new TspGAKernel(sum, path, gaResultSum, gaResult, distances, size, n, pm, epochsInGPU, isFaultIntegrity);
+            List<Double> tabuList = countingToTabu
+                    .entrySet().parallelStream().filter(a -> a.getValue() > 8)
+                    .sorted(Comparator.comparing(a -> a.getKey().getTotal()))
+                    .limit(sizeTabu)
+                    .map(a -> a.getKey().getTotal()).collect(Collectors.toList());
+            int countTabu = tabuList.size();
+            if (countTabu > 0) {
+                System.out.println("Tabu best path: " + tabuList.get(0));
+            }
+            int depthBst = countTabu == 0 ? 0 : 32 - Integer.numberOfLeadingZeros(countTabu - 1);
+            depthBst = Math.max(1, depthBst);
+            int sizeBst = (1 << depthBst) - 1;
+            System.out.println("Tabu path total: " + countTabu);
+            if (countTabu < sizeBst) {
+                int elementsToAdd = sizeBst - countTabu;
+                for (int i = 0; i < elementsToAdd; i++) {
+                    tabuList.add(Double.MAX_VALUE);
+                }
+            }
+
+            double bstTable[] = createBst(tabuList, depthBst, sizeBst);
+
+            Integer trialsCrossover = onlyMutate ? 0 : 12;
+            Instant end = Instant.now();
+            Duration timeElapsedEpoch = Duration.between(startEpoch, end);
+            System.out.println("Time taken preEpoch on CPU: " + timeElapsedEpoch.toMillis() + " milliseconds,");
+            System.out.println("End CPU calculation ");
+            startEpoch = Instant.now();
+            TspGAKernel kernelGPU = new TspGAKernel(sum, path, gaResultSum, gaResult, distances, size, n, pm, epochsInGPU, isFaultIntegrity, trialsCrossover, trialsCrossover * 2, epoch, bstTable, depthBst);
             //kernelGPU.setExecutionMode(Kernel.EXECUTION_MODE.JTP);
             kernelGPU.execute(Range.create(size));
             kernelGPU.dispose();
             checkIntegrityAndRepair(ts, n, path, sum, rndGen, isFaultIntegrity, colonyMultiplier, pm);
-            Instant end = Instant.now();
+            end = Instant.now();
             Duration timeElapsed = Duration.between(start, end);
-            Duration timeElapsedEpoch = Duration.between(startEpoch, end);
+            timeElapsedEpoch = Duration.between(startEpoch, end);
             System.out.println("Time taken epochsInGPU = " + epochsInGPU + " on GPU: " + timeElapsedEpoch.toMillis() + " milliseconds,");
             System.out.println("Total: " + timeElapsed.toSeconds() + " seconds");
             System.out.println("End GPU calculation ");
+            startEpoch = Instant.now();
             List<Colony> results = postEpochProcessing(ts, path, sum, epoch, colonyMultiplier);
 
             List<Integer> distinct = results.stream().map(c -> c.getIndividuals().size()).collect(Collectors.toList());
@@ -93,8 +151,10 @@ public class TspSolverApplication implements CommandLineRunner {
 
             counterMerge++;
             if ((distintSum < ts / 32 && counterMerge > 32) || distintSum < ts / 64) {
+                counterTotalMerge++;
                 counterMerge = 0;
                 System.out.println("------> MERGE last colonies now <------");
+                onlyMutate = false;
                 Colony total = new Colony();
                 Integer bestId = 0;
                 for (Colony colony : results) {
@@ -102,6 +162,13 @@ public class TspSolverApplication implements CommandLineRunner {
                         Map<Path, int[]> actualBest = bestsHistorical.get(bestId).entrySet().stream()
                                 .sorted(Comparator.comparing(a -> a.getKey().getTotal()))
                                 .limit(bestsHistoricalCounter).collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue()));
+                        for (Path pathCandidate : colony.getIndividuals().keySet()) {
+                            if (countingToTabu.containsKey(pathCandidate)) {
+                                countingToTabu.put(pathCandidate, countingToTabu.get(pathCandidate) + 1);
+                            } else {
+                                countingToTabu.put(pathCandidate, 1);
+                            }
+                        }
                         colony.getIndividuals().putAll(actualBest);
                     }
                     total = new Colony(total, colony);
@@ -110,10 +177,10 @@ public class TspSolverApplication implements CommandLineRunner {
                 oneBigColony.add(total);
                 copyPathsIntoOtherTable(ts, n, path, sum, sum2, path2);
                 createNextGeneration(size, pm, ts, n, path, rndGen, oneBigColony, 40);
-                allPaths.addAll(oneBigColony.stream()
-                        .map(a -> a.getIndividuals().keySet())
-                        .flatMap(a -> a.stream())
-                        .collect(Collectors.toList()));
+//                allPaths.addAll(oneBigColony.stream()
+//                        .map(a -> a.getIndividuals().keySet())
+//                        .flatMap(a -> a.stream())
+//                        .collect(Collectors.toList()));
             } else {
                 int i = 0;
                 for (Colony colony : results) {
@@ -123,23 +190,47 @@ public class TspSolverApplication implements CommandLineRunner {
                         intersection.retainAll(colony2.getIndividuals().keySet());
                         Integer intersectionSum = intersection.size();
                         System.out.print(String.format(" %5d", intersectionSum));
-                        if (i < j) {
-                            colony.setIndividuals(colony.getIndividuals()
-                                    .entrySet().stream().filter(a -> !intersection.contains(a.getKey()))
-                                    .collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue())));
-                        }
+//                        if (i < j && epoch % 10 == 5) {
+//                            colony.setIndividuals(colony.getIndividuals()
+//                                    .entrySet().stream().filter(a -> !intersection.contains(a.getKey()))
+//                                    .collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue())));
+//                        }
                         j++;
                     }
                     i++;
                     System.out.println();
                 }
-                System.out.println("Intersect with existed all paths:");
-                Integer bestId = 0;
+                System.out.println("Intersection with all historical paths");
+                i = 0;
                 for (Colony colony : results) {
-                    Set<Path> intersection = new HashSet<>(colony.getIndividuals().keySet());
-                    intersection.retainAll(allPaths);
-                    Integer intersectionSum = intersection.size();
-                    System.out.print(String.format(" %5d", intersectionSum));
+                    int j = 0;
+                    for (Set<Path> colony2 : allPaths) {
+                        Set<Path> intersection = new HashSet<>(colony.getIndividuals().keySet());
+                        intersection.retainAll(colony2);
+                        Integer intersectionSum = intersection.size();
+                        System.out.print(String.format(" %5d", intersectionSum));
+//                        if (i != j && epoch % 10 == 5) {
+//                            colony.setIndividuals(colony.getIndividuals()
+//                                    .entrySet().stream().filter(a -> !intersection.contains(a.getKey()))
+//                                    .collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue())));
+//                        }
+                        j++;
+                    }
+
+                    i++;
+                    System.out.println();
+                }
+                //System.out.println("Intersect with existed all paths:");
+                Integer bestId = 0;
+                Map<Path, int[]> bests = new HashMap<>();
+                for (Colony colony : results) {
+//                    for (Set<Path> paths : allPaths) {
+//                        Set<Path> intersection = new HashSet<>(colony.getIndividuals().keySet());
+//                        intersection.retainAll(paths);
+//                        Integer intersectionSum = intersection.size();
+//                        System.out.print(String.format(" %5d", intersectionSum));
+//                    }
+//                    System.out.println();
                     bestsHistorical.get(bestId).putAll(colony.getIndividuals());
                     Map<Path, int[]> actualBest = bestsHistorical.get(bestId).entrySet().stream()
                             .sorted(Comparator.comparing(a -> a.getKey().getTotal()))
@@ -147,24 +238,45 @@ public class TspSolverApplication implements CommandLineRunner {
                     bestsHistorical.get(bestId).clear();
                     bestsHistorical.get(bestId).putAll(actualBest);
                     bestId++;
-                    if (epoch > 20 && colony.getIndividuals().size() < bestsHistoricalCounter / 4) {
+                    bests.putAll(actualBest.entrySet().stream().sorted(Comparator.comparing(a -> a.getKey().getTotal()))
+                            .limit(1).collect(Collectors.toMap(a->a.getKey(), a->a.getValue())));
+                    if (epoch > 5 && colony.getIndividuals().size() < bestsHistoricalCounter / 4) {
+                        for (Path pathCandidate : colony.getIndividuals().keySet()) {
+                            if (countingToTabu.containsKey(pathCandidate)) {
+                                countingToTabu.put(pathCandidate, countingToTabu.get(pathCandidate) + 1);
+                            } else {
+                                countingToTabu.put(pathCandidate, 1);
+                            }
+                        }
                         colony.getIndividuals().putAll(actualBest);
                     }
                 }
 
+                Map<Path, int[]> best = bests.entrySet().stream().sorted(Comparator.comparing(a -> a.getKey().getTotal()))
+                        .limit(1).collect(Collectors.toMap(a-> a.getKey(), a->a.getValue()));
+                Path bestKey = best.keySet().iterator().next();
+                System.out.println("Best path = " + bestKey);
+                for (int j = 0; j < best.get(bestKey).length; j++) {
+                    System.out.print("-" + best.get(bestKey)[j]);
+                };
+
+
                 System.out.println();
                 copyPathsIntoOtherTable(ts, n, path, sum, sum2, path2);
                 createNextGeneration(size, pm, ts, n, path, rndGen, results, 400);
-                allPaths.addAll(results.stream()
-                        .map(a -> a.getIndividuals().keySet())
-                        .flatMap(a -> a.stream())
-                        .collect(Collectors.toList()));
+                int colonyNumber = 0;
+                for (Set<Path> paths : allPaths) {
+                    paths.addAll(results.get(colonyNumber).getIndividuals().keySet());
+                    colonyNumber++;
+                }
             }
-            System.out.println("Total unique paths in algorithm = " + allPaths.size());
-            System.out.println("End CPU calculation");
+            countingToTabu = countingToTabu
+                    .entrySet().parallelStream()
+                    .sorted(Comparator.comparing(a -> a.getKey().getTotal()))
+                    .limit(524288).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+            //System.out.println("Total unique paths in algorithm = " + allPaths.size());
         }
     }
-
     private void checkIntegrityAndRepair(int ts, int n, int[][] path, double[] sum, Random rndGen, int[] isFaultIntegrity, int colonyMultiplier, int pm) {
         Integer faultIntegrity = Arrays.stream(isFaultIntegrity).sum();
         if (faultIntegrity > 0) {
@@ -187,6 +299,43 @@ public class TspSolverApplication implements CommandLineRunner {
         }
     }
 
+    private double[] createBst(List<Double> list, int depthBst, int sizeBst) {
+        double[] bstTable = new double[sizeBst];
+        int base = sizeBst;
+        int start = 0;
+        for (int level = 0; level < depthBst; level++) {
+            int elementsInLevel = 1 << level;
+            int middle = base / 2;
+            base = base / 2;
+            start += elementsInLevel / 2;
+            for (int j = start; j < start + elementsInLevel; j++) {
+                bstTable[j] = list.get(middle);
+                middle += 1 << (depthBst - level);
+            }
+        }
+        return bstTable;
+    }
+
+    private int searchInBst(double value, double[] bstTable, int depthBst) {
+        int startId = 0;
+        for (int level = 0; level < depthBst; level++) {
+            double vertexInBst = bstTable[startId];
+            int leftId = (startId + 1) * 2 - 1;
+            int rightId = (startId + 1) * 2;
+            if (vertexInBst <= value + 0.0000001 &&
+                    vertexInBst >= value - 0.0000001) {
+                return 1;
+            } else if (vertexInBst > value && leftId < 1 << (depthBst)) {
+                startId = leftId;
+            } else if (vertexInBst < value && rightId < 1 << (depthBst)) {
+                startId = rightId;
+            } else {
+                return 0;
+            }
+        }
+        return 0;
+    }
+
     private static List<Colony> postEpochProcessing(int ts, int[][] path, double[] sum, int epoch, int colonyMultiplier) {
         List<Map<Path, int[]>> distinct = getDistinctPathWithIndex(ts, sum, path, epoch, colonyMultiplier);
         List<Colony> ret = new ArrayList<>(distinct.size());
@@ -202,31 +351,50 @@ public class TspSolverApplication implements CommandLineRunner {
 
     private static List<Map<Path, int[]>> getDistinctPathWithIndex(int ts, double[] sum, int[][] path, int epoch, int colonyMultiplier) {
         List<Map<Path, int[]>> ret = new ArrayList<>();
+        Map<Double, Map<Path, int[]>> sortedMap = new HashMap<>();
+        Map<Double, Path> bestPaths = new HashMap<>();
+        Map<Double, Path> worstPaths = new HashMap<>();
         Integer howMany = ts / colonyMultiplier;
         Map<Double, String> toPrint = new HashMap<>();
         for (int col = 0; col < colonyMultiplier; col++) {
             Integer start = col * howMany;
             Integer end = (col + 1) * howMany;
             Map<Path, int[]> distinct = new HashMap<>();
-            double total = 0.0;
+            double mean = 0.0;
             for (int i = start; i < end; i++) {
-                total += sum[i] / ts * colonyMultiplier;
+                mean += sum[i] / ts * colonyMultiplier;
                 distinct.put(new Path(sum[i]), path[i]);
             }
             ret.add(distinct);
             List<Path> sequence = distinct.keySet().stream().sorted(Comparator.comparing(Path::getTotal)).collect(Collectors.toList());
             Double best = sequence.get(0).getTotal();
             Double worst = sequence.get(sequence.size() - 1).getTotal();
+            Path bestPath = sequence.get(0);
+            Path worstPath = sequence.get(sequence.size() - 1);
             String out = String.format("Colony = %3d", col);
-            out+= String.format(", Epoch = %3d", epoch);
-            out+= String.format(", Mean = %.3f", total);
-            out+= String.format(", Best = %.6f", best);
-            out+= String.format(", Worst = %.6f", worst);
-            out+= String.format(", Unique = %d", distinct.size());
-            toPrint.put(best, out);
+            out += String.format(", Epoch = %3d", epoch);
+            out += String.format(", Mean = %.3f", mean);
+            out += String.format(", Best = %.6f", best);
+            out += String.format(", Worst = %.6f", worst);
+            out += String.format(", Unique = %d", distinct.size());
+            toPrint.put(mean, out);
+            sortedMap.put(mean, distinct);
+            bestPaths.put(mean, bestPath);
+            worstPaths.put(mean, worstPath);
         }
-        for (Double best : toPrint.keySet().stream().sorted().collect(Collectors.toList())) {
-            System.out.println(toPrint.get(best));
+        Map<Path, int[]> previous = null;
+        Path previousWorstPath = null;
+        for (Double mean : toPrint.keySet().stream().sorted().collect(Collectors.toList())) {
+            System.out.println(toPrint.get(mean));
+            if (previousWorstPath != null && previous != null) {
+                Path actualBest = bestPaths.get(mean);
+//                if (previousWorstPath.getTotal() < actualBest.getTotal()) {
+//                    Map<Path, int[]> actualDistinct = sortedMap.get(mean);
+//                    actualDistinct.put(previousWorstPath, previous.get(previousWorstPath));
+//                }
+            }
+            previousWorstPath = worstPaths.get(mean);
+            previous = sortedMap.get(mean);
         }
         return ret;
     }

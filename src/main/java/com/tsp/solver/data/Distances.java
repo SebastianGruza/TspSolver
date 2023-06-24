@@ -41,6 +41,64 @@ public class Distances {
         }
     }
 
+//    public Distances(String filename, int startFrom) {
+//        this.filename = filename;
+//        List<String> allLines = LoadFromFile(filename);
+//        List<Double> xCoord = new ArrayList<>();
+//        List<Double> yCoord = new ArrayList<>();
+//        Random rnd = new Random();
+//        int actualLine = 0;
+//        for (String line : allLines) {
+//            if (actualLine < startFrom - 1) {
+//                actualLine += 1;
+//                continue;
+//            }
+//            if (line != null) {
+//                String[] split = line.trim().replaceAll("\\s{2,}", " ").split(" ");
+//                if (split.length >= 3) {
+//                    try {
+//                        xCoord.add(Double.parseDouble(split[split.length - 2]));
+//                        yCoord.add(Double.parseDouble(split[split.length - 1]));
+//                        actualLine += 1;
+//                    } catch (NumberFormatException nfe) {
+//
+//                    }
+//                }
+//            }
+//        }
+//        this.n = xCoord.size();
+//        this.distances = new double[this.n][this.n];
+//        for (int i = 0; i < n; i++) {
+//            for (int j = 0; j < i; j++) {
+//                distances[i][j] = Math.round(Math.sqrt(Math.pow(xCoord.get(i) - xCoord.get(j), 2) + Math.pow(yCoord.get(i) - yCoord.get(j), 2)))
+//                        + rnd.nextDouble() * 0.002 - 0.001;
+//                distances[j][i] = distances[i][j];
+//            }
+//            distances[i][i] = 0.0;
+//        }
+//    }
+
+    public Distances(String filename, int number) {
+        this.filename = filename;
+        List<String> allLines = LoadFromFile(filename);
+        this.n = number;
+        this.distances = new double[this.n][this.n];
+        int actualLine = 0;
+        for (String line : allLines) {
+            if (actualLine == 0) {
+                actualLine = 1;
+                continue;
+            }
+            if (line != null && actualLine < number + 1) {
+                String[] split = line.split(";");
+                for (int i = 1; i < split.length; i++) {
+                    distances[i - 1][actualLine - 1] = Double.parseDouble(split[i]);
+                }
+                actualLine++;
+            }
+        }
+    }
+
     public Distances(int n) {
         Random rndGen = new Random();
         this.n = n;

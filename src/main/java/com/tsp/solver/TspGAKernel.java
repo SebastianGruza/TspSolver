@@ -15,6 +15,11 @@ class TspGAKernel extends Kernel {
     int n;
     int pm;
     int epochs;
+    int trialsCrossover;
+    int trialsMutation;
+    int trialMutCounter;
+    double bstTable[];
+    int depthBst;
     final int[] isFault;
     final int states[];
     int existedVertices[][];
@@ -22,7 +27,10 @@ class TspGAKernel extends Kernel {
     final static int INTEGER_SIZE = 4;
 
 
-    public TspGAKernel(double[] pathSum, int[][] path, double[] gaResultSum, int[][] gaResult, double[][] distances, int size, int n, int pm, int epochs, int[] isFault) {
+    public TspGAKernel(double[] pathSum, int[][] path, double[] gaResultSum,
+                       int[][] gaResult, double[][] distances, int size, int n, int pm,
+                       int epochs, int[] isFault, int trialsCrossover, int trialsMutation,
+                       int mainEpoch, double bstTable[], int depthBst) {
         this.pathSum = pathSum;
         this.distances = distances;
         this.path = path;
@@ -34,7 +42,12 @@ class TspGAKernel extends Kernel {
         this.epochs = epochs;
         this.existedVertices = new int[size * pm][n];
         this.isFault = isFault;
+        this.trialsCrossover = trialsCrossover;
+        this.trialsMutation = trialsMutation;
+        this.bstTable = bstTable;
+        this.depthBst = depthBst;
         int maxThreads = size;
+        trialMutCounter = (int) (n * sqrt(n) / 40.0 * (Math.random() * 1.6 + 0.2)) + 2;
 
         states = new int[SEED_SIZE * maxThreads];
 
@@ -52,34 +65,10 @@ class TspGAKernel extends Kernel {
         int gid = getGlobalId();
         for (int epoch = 0; epoch < epochs; epoch++) {
             randomShift(gid);
-            //step 2: mutation:
-            int trialsMutation = 12;
-            for (int trial = 0; trial < trialsMutation; trial++) {
-                calculateMutation(gid);
-                calculatePathDistances(gid);
-                selectionOfIndividuals(gid);
-                randomShift(gid);
-            }
-
-            for (int trial = 0; trial < trialsMutation; trial++) {
-                calculateMutation2(gid);
-                calculatePathDistances(gid);
-                selectionOfIndividuals(gid);
-                randomShift(gid);
-            }
-
-            for (int trial = 0; trial < trialsMutation; trial++) {
-                calculateMutation3(gid);
-                calculatePathDistances(gid);
-                selectionOfIndividuals(gid);
-                randomShift(gid);
-            }
-
             //step 3: crossover:
-            int trialsCrossover = 6;
             for (int trial = 0; trial < trialsCrossover; trial++) {
                 if (pm == 4) {
-                    calculateCrossoverFor4(gid, epoch);
+                    calculateCrossoverFor4(gid, trial);
                 } else if (pm == 2) {
                     crossover(gid, 0, 1);
                 } else {
@@ -89,6 +78,72 @@ class TspGAKernel extends Kernel {
                 selectionOfIndividuals(gid);
                 randomShift(gid);
             }
+            //step 2: mutation:
+//            for (int trial = 0; trial < trialsMutation; trial++) {
+//                calculateMutation(gid);
+//                calculatePathDistances(gid);
+//                selectionOfIndividuals(gid);
+//                randomShift(gid);
+//            }
+//
+//            for (int trial = 0; trial < trialsMutation; trial++) {
+//                calculateMutation2(gid);
+//                calculatePathDistances(gid);
+//                selectionOfIndividuals(gid);
+//                randomShift(gid);
+//            }
+
+//            for (int trial = 0; trial < trialsMutation; trial++) {
+//                calculateMutation3(gid);
+//                calculatePathDistances(gid);
+//                selectionOfIndividuals(gid);
+//                randomShift(gid);
+//            }
+
+
+            for (int trial = 0; trial < 2; trial++) {
+                calculateMutation8(gid);
+                calculatePathDistances(gid);
+                selectionOfIndividuals(gid);
+                randomShift(gid);
+            }
+
+            for (int trial = 0; trial < 12; trial++) {
+                calculateMutation7(gid);
+                calculatePathDistances(gid);
+                selectionOfIndividuals(gid);
+                randomShift(gid);
+            }
+
+            for (int trial = 0; trial < 12; trial++) {
+                calculateMutation5(gid);
+                calculatePathDistances(gid);
+                selectionOfIndividuals(gid);
+                randomShift(gid);
+            }
+
+            for (int trial = 0; trial < 12; trial++) {
+                calculateMutation3(gid);
+                calculatePathDistances(gid);
+                selectionOfIndividuals(gid);
+                randomShift(gid);
+            }
+
+            for (int trial = 0; trial < 12; trial++) {
+                calculateMutation4(gid);
+                calculatePathDistances(gid);
+                selectionOfIndividuals(gid);
+                randomShift(gid);
+            }
+
+            for (int trial = 0; trial < 12; trial++) {
+                calculateMutation6(gid);
+                calculatePathDistances(gid);
+                selectionOfIndividuals(gid);
+                randomShift(gid);
+            }
+
+
             if (epoch + 1 == epochs) {
                 checkIntegrity(gid);
             }
@@ -116,12 +171,36 @@ class TspGAKernel extends Kernel {
             int parent = pm * gid + el;
             float numRandom1 = random01();
             int rnd1 = (int) (numRandom1 * (n - 2));
-            int rnd2 = getBestRandomVertex(gaResult[parent], rnd1, n/50);
+            int rnd2 = getBestRandomVertex(gaResult[parent], rnd1, n / 50);
 
             int zamien = gaResult[parent][rnd1];
             gaResult[parent][rnd1] = gaResult[parent][rnd2];
             gaResult[parent][rnd2] = zamien;
 
+        }
+    }
+
+    private void calculateMutation6(int gid) {
+        for (int el = 0; el < pm; el++) {
+            int parent = pm * gid + el;
+            double best = Double.MAX_VALUE;
+            int rnd1 = 0;
+            int rnd2 = rnd1;
+            for (int i = 0; i < trialMutCounter / 2; i++) {
+                float numRandom1 = random01();
+                int actualRnd1 = (int) (numRandom1 * (n / 2));
+                float numRandom2 = random01();
+                int actualRnd2 = (int) (numRandom2 * (n - 2 - actualRnd1)) + actualRnd1;
+                double actualBest = getBestRandomVertexBetterMethod(gaResult[parent], actualRnd1, actualRnd2);
+                if (actualBest < best) {
+                    best = actualBest;
+                    rnd1 = actualRnd1;
+                    rnd2 = actualRnd2;
+                }
+            }
+            int zamien = gaResult[parent][rnd1];
+            gaResult[parent][rnd1] = gaResult[parent][rnd2];
+            gaResult[parent][rnd2] = zamien;
         }
     }
 
@@ -132,12 +211,12 @@ class TspGAKernel extends Kernel {
             float numRandom2 = random01();
             int p1 = (int) (numRandom1 * (n - 1));
             int q1 = Next(p1);
-            int p2 = getBestRandomVertex(gaResult[parent], p1, n/50);
+            int p2 = getBestRandomVertex(gaResult[parent], p1, n / 50);
             if (p2 != p1 && p2 != q1) {
                 int temp = gaResult[parent][q1];
                 gaResult[parent][q1] = gaResult[parent][p2];
                 int check = 1;
-                for (int i = 0; i < size; i++) {
+                for (int i = 0; i < n; i++) {
                     if (gaResult[parent][Previous(p2)] != temp && check == 1) {
                         gaResult[parent][p2] = gaResult[parent][Previous(p2)];
                         p2 = Previous(p2);
@@ -154,15 +233,26 @@ class TspGAKernel extends Kernel {
         for (int el = 0; el < pm; el++) {
             int parent = pm * gid + el;
             for (int i = 0; i < n; i++) {
-                existedVertices[parent][0] = 0;
+                existedVertices[parent][i] = 0;
             }
-            float numRandom1 = random01();
-            int rnd1 = (int) (numRandom1 * (n - 2));
-            int rnd2 = getBestRandomVertex(gaResult[parent], rnd1, n/50);
-
-            if  (rnd1 != rnd2 ) {
+            double best = Double.MAX_VALUE;
+            int rnd1 = 0;
+            int rnd2 = rnd1;
+            for (int i = 0; i < trialMutCounter; i++) {
+                float numRandom1 = random01();
+                float numRandom2 = random01();
+                int actualRnd1 = (int) (numRandom1 * (n - 3)) + 1;
+                int actualRnd2 = (int) (numRandom2 * (n - actualRnd1 - 2)) + actualRnd1 + 1;
+                double actualBest = getBestRandomVertexTwoOpt(gaResult[parent], actualRnd1, actualRnd2);
+                if (actualBest < best) {
+                    best = actualBest;
+                    rnd1 = actualRnd1;
+                    rnd2 = actualRnd2;
+                }
+            }
+            if (rnd1 != rnd2) {
                 int check = 0;
-                for (int i = 0; i < size; i++) {
+                for (int i = 0; i < n; i++) {
                     if (existedVertices[parent][rnd1] == 0 && existedVertices[parent][rnd2] == 0 && check == 0) {
                         if (rnd1 == rnd2 || Next(rnd1) == rnd2) {
                             check = 1;
@@ -180,10 +270,207 @@ class TspGAKernel extends Kernel {
         }
     }
 
+    private void calculateMutation4(int gid) {
+        for (int el = 0; el < pm; el++) {
+            int parent = pm * gid + el;
+            double best = Double.MAX_VALUE;
+            int p1 = 0;
+            int p2 = p1;
+            for (int i = 0; i < trialMutCounter / 2; i++) {
+                float numRandom1 = random01();
+                float numRandom2 = random01();
+                int actualP1 = (int) (numRandom1 * (n / 2));
+                int actualP2 = (int) (numRandom2 * (n - actualP1 - 2)) + actualP1;
+                double actualBest = getBestRandomVertexGetMiddleCity(gaResult[parent], actualP1, actualP2);
+                if (actualBest < best) {
+                    best = actualBest;
+                    p1 = actualP1;
+                    p2 = actualP2;
+                }
+            }
+            int q1 = Next(p1);
+            int r1 = Next(q1);
+            int r2 = Next(p2);
+            int p2City = gaResult[parent][p2];
+            int r2City = gaResult[parent][r2];
+            if (p2 != p1 && p2 != q1) {
+                int temp = gaResult[parent][q1];
+                gaResult[parent][q1] = gaResult[parent][r1];
+                int check = 1;
+                for (int i = 0; i < n; i++) {
+                    if (gaResult[parent][Next(r1)] != p2City && check == 1) {
+                        gaResult[parent][r1] = gaResult[parent][Next(r1)];
+                        r1 = Next(r1);
+                    } else {
+                        check = 0;
+                    }
+                }
+                gaResult[parent][r1] = p2City;
+                gaResult[parent][Next(r1)] = temp;
+                gaResult[parent][Next(Next(r1))] = r2City;
+            }
+        }
+    }
+
+    private void calculateMutation7(int gid) {
+        for (int el = 0; el < pm; el++) {
+            int parent = pm * gid + el;
+
+            double best = Double.MAX_VALUE;
+            int p1 = 0;
+            int p2 = p1;
+            for (int i = 0; i < trialMutCounter / 2; i++) {
+                float numRandom1 = random01();
+                float numRandom2 = random01();
+                int actualP1 = (int) (numRandom1 * (n / 2));
+                int actualP2 = (int) (numRandom2 * (n - actualP1 - 7)) + actualP1 + 4;
+                double actualBest = getBestRandomVertexGet1to3City(gaResult[parent], actualP1, actualP2);
+                if (actualBest < best) {
+                    best = actualBest;
+                    p1 = actualP1;
+                    p2 = actualP2;
+                }
+            }
+            int q1 = Next(p1);
+            int r1 = Next(q1);
+            int s1 = Next(r1);
+            int r2 = Next(p2);
+            int p2City = gaResult[parent][p2];
+            int r2City = gaResult[parent][r2];
+            if (p2 != p1 && p2 != q1) {
+                int temp1 = gaResult[parent][q1];
+                int temp2 = gaResult[parent][r1];
+                int temp3 = gaResult[parent][s1];
+                gaResult[parent][q1] = gaResult[parent][Next(s1)];
+                gaResult[parent][r1] = gaResult[parent][Next(Next(s1))];
+                int check = 1;
+                for (int i = 0; i < n; i++) {
+                    if (gaResult[parent][Next(Next(Next(s1)))] != p2City && check == 1) {
+                        gaResult[parent][s1] = gaResult[parent][Next(Next(Next(s1)))];
+                        s1 = Next(s1);
+                    } else {
+                        check = 0;
+                    }
+                }
+                gaResult[parent][s1] = p2City;
+                gaResult[parent][Next(s1)] = temp1;
+                gaResult[parent][Next(Next(s1))] = temp2;
+                gaResult[parent][Next(Next(Next(s1)))] = temp3;
+                gaResult[parent][Next(Next(Next(Next((s1)))))] = r2City;
+            }
+        }
+    }
+
+    private void calculateMutation8(int gid) {
+        for (int el = 0; el < pm; el++) {
+            int parent = pm * gid + el;
+            for (int i = 0; i < n; i++) {
+                existedVertices[parent][i] = 0;
+            }
+            double best = Double.MAX_VALUE;
+            int p1 = 0;
+            int p2 = p1;
+            int p3 = 2;
+            for (int i = 0; i < trialMutCounter * 4; i++) {
+                float numRandom1 = random01();
+                float numRandom2 = random01();
+                float numRandom3 = random01();
+                int actualP1 = (int) (numRandom1 * (n / 3));
+                int actualSize = (int) (numRandom2 * numRandom2 * numRandom2 * (n / 40) + 0.6) + 2;
+                int actualP2 = (int) (numRandom3 * (n - actualP1 - actualSize - 7)) + actualP1 + actualSize + 2;
+                double actualBest = getBestRandomVertexGet0toNCity(gaResult[parent], actualP1, actualP2, actualSize);
+                if (actualBest < best) {
+                    best = actualBest;
+                    p1 = actualP1;
+                    p2 = actualP2;
+                    p3 = actualSize;
+                }
+            }
+            int q1 = Next(p1);
+            int r2 = Next(p2);
+            int p2City = gaResult[parent][p2];
+            int r2City = gaResult[parent][r2];
+            if (p2 != p1 && p2 != q1) {
+
+                for (int i = 0; i <= p3; i++) {
+                    existedVertices[parent][(q1 + i) % n] = gaResult[parent][(q1 + i) % n];
+                }
+
+                int s1 = (q1 + p3 + 1) % n;
+                for (int i = 0; i <= p3; i++) {
+                    gaResult[parent][(q1 + i) % n] = gaResult[parent][(s1 + i) % n];
+                }
+
+                int check = 1;
+                for (int i = 0; i < n; i++) {
+                    if (gaResult[parent][(s1 + p3 + 1) % n] != p2City && check == 1) {
+                        gaResult[parent][s1] = gaResult[parent][(s1 + p3 + 1) % n];
+                        s1 = Next(s1);
+                    } else {
+                        check = 0;
+                    }
+                }
+                gaResult[parent][s1] = p2City;
+
+                for (int i = 0; i <= p3; i++) {
+                    gaResult[parent][(s1 + i + 1) % n] = existedVertices[parent][q1 + i];
+                }
+
+                gaResult[parent][(s1 + p3 + 2) % n] = r2City;
+            }
+        }
+    }
+
+
+    private void calculateMutation5(int gid) {
+        for (int el = 0; el < pm; el++) {
+            int parent = pm * gid + el;
+
+            double best = Double.MAX_VALUE;
+            int p1 = 0;
+            int p2 = p1;
+            for (int i = 0; i < trialMutCounter / 2; i++) {
+                float numRandom1 = random01();
+                float numRandom2 = random01();
+                int actualP1 = (int) (numRandom1 * (n / 2));
+                int actualP2 = (int) (numRandom2 * (n - actualP1 - 6)) + actualP1 + 3;
+                double actualBest = getBestRandomVertexGetMiddle2City(gaResult[parent], actualP1, actualP2);
+                if (actualBest < best) {
+                    best = actualBest;
+                    p1 = actualP1;
+                    p2 = actualP2;
+                }
+            }
+            int q1 = Next(p1);
+            int r1 = Next(q1);
+            int r2 = Next(p2);
+            int p2City = gaResult[parent][p2];
+            int r2City = gaResult[parent][r2];
+            if (p2 != p1 && p2 != q1) {
+                int temp1 = gaResult[parent][q1];
+                int temp2 = gaResult[parent][r1];
+                gaResult[parent][q1] = gaResult[parent][Next(r1)];
+                int check = 1;
+                for (int i = 0; i < n; i++) {
+                    if (gaResult[parent][Next(Next(r1))] != p2City && check == 1) {
+                        gaResult[parent][r1] = gaResult[parent][Next(Next(r1))];
+                        r1 = Next(r1);
+                    } else {
+                        check = 0;
+                    }
+                }
+                gaResult[parent][r1] = p2City;
+                gaResult[parent][Next(r1)] = temp1;
+                gaResult[parent][Next(Next(r1))] = temp2;
+                gaResult[parent][Next(Next(Next(r1)))] = r2City;
+            }
+        }
+    }
+
     private int getBestRandomVertex(int[] ints, int rnd1, int counter) {
         int vertex1 = ints[rnd1];
         int rnd2 = Next(rnd1);
-        int bestRnd2  = rnd2;
+        int bestRnd2 = rnd2;
         double best = Double.MAX_VALUE;
         for (int i = 0; i < counter; i++) {
             float numRandom2 = random01();
@@ -199,6 +486,117 @@ class TspGAKernel extends Kernel {
         return rnd2;
     }
 
+    private double getBestRandomVertexBetterMethod(int[] ints, int rnd1, int rnd21) {
+        int vertex11 = ints[rnd1];
+        int rnd12 = Next(rnd1);
+        int vertex12 = ints[rnd12];
+        int rnd10 = Previous(rnd1);
+        int vertex10 = ints[rnd10];
+        int vertex21 = ints[rnd21];
+        int rnd22 = Next(rnd21);
+        int vertex22 = ints[rnd22];
+        int rnd20 = Previous(rnd21);
+        int vertex20 = ints[rnd20];
+        double actual1 = distances[vertex10][vertex11] + distances[vertex11][vertex12];
+        double actual2 = distances[vertex20][vertex21] + distances[vertex21][vertex22];
+        double new1 = distances[vertex20][vertex11] + distances[vertex11][vertex22];
+        double new2 = distances[vertex10][vertex21] + distances[vertex21][vertex12];
+        double actualBest = new1 + new2 - actual1 - actual2;
+        return actualBest;
+    }
+
+    private double getBestRandomVertexTwoOpt(int[] ints, int rnd1, int rnd21) {
+        int vertex11 = ints[rnd1];
+        int rnd12 = Previous(rnd1);
+        int vertex12 = ints[rnd12];
+        double actual1 = distances[vertex11][vertex12];
+        int vertex21 = ints[rnd21];
+        int rnd22 = Next(rnd21);
+        int vertex22 = ints[rnd22];
+        double actual2 = distances[vertex21][vertex22];
+        double new1 = distances[vertex11][vertex22];
+        double new2 = distances[vertex12][vertex21];
+        double actualBest = new1 + new2 - actual1 - actual2;
+        return actualBest;
+    }
+
+    private double getBestRandomVertexGetMiddleCity(int[] ints, int rnd1, int rnd21) {
+        int vertex11 = ints[rnd1];
+        int rnd12 = Next(rnd1);
+        int vertex12 = ints[rnd12];
+        int rnd13 = Next(rnd12);
+        int vertex13 = ints[rnd13];
+        double actual1 = distances[vertex11][vertex12] + distances[vertex12][vertex13];
+        double newPart1 = distances[vertex11][vertex13];
+        int vertex21 = ints[rnd21];
+        int rnd22 = Next(rnd21);
+        int vertex22 = ints[rnd22];
+        double actual2 = distances[vertex21][vertex22];
+        double newPart2 = distances[vertex21][vertex12] + distances[vertex12][vertex22];
+        double actualBest = newPart1 + newPart2 - actual1 - actual2;
+        return actualBest;
+    }
+
+    private double getBestRandomVertexGet1to3City(int[] ints, int rnd1, int rnd21) {
+        int vertex11 = ints[rnd1];
+        int rnd12 = Next(rnd1);
+        int vertex12 = ints[rnd12];
+        int rnd13 = Next(rnd12);
+        int vertex13 = ints[rnd13];
+        int rnd14 = Next(rnd13);
+        int vertex14 = ints[rnd14];
+        int rnd15 = Next(rnd14);
+        int vertex15 = ints[rnd15];
+        double actual1 = distances[vertex11][vertex12] + distances[vertex12][vertex13] + distances[vertex13][vertex14] + distances[vertex14][vertex15];
+        double newPart1 = distances[vertex11][vertex15];
+        int vertex21 = ints[rnd21];
+        int rnd22 = Next(rnd21);
+        int vertex22 = ints[rnd22];
+        double actual2 = distances[vertex21][vertex22];
+        double newPart2 = distances[vertex21][vertex12] + distances[vertex12][vertex13] + distances[vertex13][vertex14] + distances[vertex14][vertex22];
+        double actualBest = newPart1 + newPart2 - actual1 - actual2;
+        return actualBest;
+    }
+
+    private double getBestRandomVertexGet0toNCity(int[] ints, int rnd11, int rnd21, int size) {
+        int vertex11 = ints[rnd11];
+        int rnd12 = Next(rnd11);
+        int vertex12 = ints[rnd12];
+
+        int rnd14 = rnd12 + size;
+        int vertex14 = ints[rnd14];
+        int rnd15 = Next(rnd14);
+        int vertex15 = ints[rnd15];
+        double actual1 = distances[vertex11][vertex12] + distances[vertex14][vertex15];
+        double newPart1 = distances[vertex11][vertex15];
+        int vertex21 = ints[rnd21];
+        int rnd22 = Next(rnd21);
+        int vertex22 = ints[rnd22];
+        double actual2 = distances[vertex21][vertex22];
+        double newPart2 = distances[vertex21][vertex12] + distances[vertex14][vertex22];
+        double actualBest = newPart1 + newPart2 - actual1 - actual2;
+        return actualBest;
+    }
+
+    private double getBestRandomVertexGetMiddle2City(int[] ints, int rnd1, int rnd21) {
+        int vertex11 = ints[rnd1];
+        int rnd12 = Next(rnd1);
+        int vertex12 = ints[rnd12];
+        int rnd13 = Next(rnd12);
+        int vertex13 = ints[rnd13];
+        int rnd14 = Next(rnd13);
+        int vertex14 = ints[rnd14];
+        double actual1 = distances[vertex11][vertex12] + distances[vertex12][vertex13] + distances[vertex13][vertex14];
+        double newPart1 = distances[vertex11][vertex14];
+        int vertex21 = ints[rnd21];
+        int rnd22 = Next(rnd21);
+        int vertex22 = ints[rnd22];
+        double actual2 = distances[vertex21][vertex22];
+        double newPart2 = distances[vertex21][vertex12] + distances[vertex12][vertex13] + distances[vertex13][vertex22];
+        double actualBest = newPart1 + newPart2 - actual1 - actual2;
+        return actualBest;
+    }
+
     private int Next(int actual) {
         return (actual == this.n - 1 ? 0 : actual + 1);
     }
@@ -208,11 +606,11 @@ class TspGAKernel extends Kernel {
     }
 
 
-    private void calculateCrossoverFor4(int gid, int epoch) {
-        if (epoch % 3 == 0) {
+    private void calculateCrossoverFor4(int gid, int trial) {
+        if (trial % 3 == 0) {
             crossover(gid, 2, 3);
             crossover(gid, 0, 1);
-        } else if (epoch % 3 == 1) {
+        } else if (trial % 3 == 1) {
             crossover(gid, 1, 3);
             crossover(gid, 0, 2);
         } else {
@@ -322,7 +720,15 @@ class TspGAKernel extends Kernel {
             }
             pathSum[noPath] += distances[path[noPath][0]][path[noPath][n - 1]];
             gaResultSum[noPath] += distances[gaResult[noPath][0]][gaResult[noPath][n - 1]];
+            //TABU PATH:
+            if (searchInBst(pathSum[noPath]) == 1) {
+                pathSum[noPath] *= 1.004;
+            }
+            if (searchInBst(gaResultSum[noPath]) == 1) {
+                gaResultSum[noPath] *= 1.004;
+            }
         }
+
     }
 
     private void selectionOfIndividuals(int gid) {
@@ -355,6 +761,26 @@ class TspGAKernel extends Kernel {
                 pathSum[weakest] = gaResultSum[noPath];
             }
         }
+    }
+
+    private int searchInBst(double value) {
+        int startId = 0;
+        for (int level = 0; level < depthBst; level++) {
+            double vertexInBst = bstTable[startId];
+            int leftId = (startId + 1) * 2 - 1;
+            int rightId = (startId + 1) * 2;
+            if (vertexInBst <= value + 0.0000001 &&
+                    vertexInBst >= value - 0.0000001) {
+                return 1;
+            } else if (vertexInBst > value && leftId < 1 << depthBst) {
+                startId = leftId;
+            } else if (vertexInBst < value && rightId < 1 << depthBst) {
+                startId = rightId;
+            } else {
+                return 0;
+            }
+        }
+        return 0;
     }
 
     /**
