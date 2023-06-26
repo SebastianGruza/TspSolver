@@ -1,10 +1,11 @@
 package com.tsp.solver;
 
-import com.aparapi.Kernel;
 import com.aparapi.Range;
+import com.tsp.solver.configuration.AppConfiguration;
 import com.tsp.solver.data.Colony;
 import com.tsp.solver.data.Distances;
 import com.tsp.solver.data.Path;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -19,6 +20,11 @@ import java.util.stream.Collectors;
 @SpringBootApplication
 public class TspSolverApplication implements CommandLineRunner {
 
+    @Autowired
+    Distances dist;
+
+    @Autowired
+    AppConfiguration appConfiguration;
     public static void main(String[] args) {
 
         SpringApplication.run(TspSolverApplication.class, args);
@@ -39,15 +45,10 @@ public class TspSolverApplication implements CommandLineRunner {
 
     public void start() throws InterruptedException {
 
-        final int size = 16384; // 4096 active cores
+        final int size = appConfiguration.getGpuThreads();
         final int sizeTabu = 131072;
         final int pm = 4; //path multiplier - how many paths per thread
         final int ts = size * pm; //total size of paths
-        Distances dist = new Distances("full.txd");
-        //Alternatives:
-        //Distances dist = new Distances("gr9882.tsp", 7);
-        //Distances dist = new Distances("Dane_TSP_48.csv", 48);
-        //Distances dist = new Distances(37);
         final int n = dist.n;
 
         final double[][] distances = dist.distances;
@@ -69,12 +70,14 @@ public class TspSolverApplication implements CommandLineRunner {
         System.out.println("START");
         Instant start = Instant.now();
         Instant startEpoch = Instant.now();
-        GreedyAlgorithm.CreateNewGenerationWithGreedyAlgorithm(n/10, 1, distances, path, ts);
+        if (appConfiguration.getDivideGreedy() > 0) {
+            GreedyAlgorithm.CreateNewGenerationWithGreedyAlgorithm(n / appConfiguration.getDivideGreedy(), 1, distances, path, ts);
+        }
         System.out.println("GreedyAlgorithm check");
         Random rndGen = new Random();
         int epochsInGPU = 3;
         int epochsInMain = 100000;
-        int colonyMultiplier = 16;
+        int colonyMultiplier = appConfiguration.getColonyMultiplier();
         int bestsHistoricalCounter = size / 8;
         List<Set<Path>> allPaths = new ArrayList<>();
         for (int i = 0; i < colonyMultiplier; i++) {
@@ -256,9 +259,13 @@ public class TspSolverApplication implements CommandLineRunner {
                         .limit(1).collect(Collectors.toMap(a-> a.getKey(), a->a.getValue()));
                 Path bestKey = best.keySet().iterator().next();
                 System.out.println("Best path = " + bestKey);
+                String bestSolution = "";
                 for (int j = 0; j < best.get(bestKey).length; j++) {
                     System.out.print("-" + best.get(bestKey)[j]);
+                    bestSolution += "-" + best.get(bestKey)[j];
                 };
+                bestSolution = bestSolution.substring(1);
+                dist.bestSolution = bestSolution;
 
 
                 System.out.println();

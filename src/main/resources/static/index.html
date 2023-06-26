@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cluster Visualization</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <style>
+        .dot {
+            stroke: #000;
+        }
+        .tooltip {
+            position: absolute;
+            text-align: center;
+            padding: 10px;
+            background: #ddd;
+            color: #000;
+            border-radius: 5px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+<script>
+    function fetchDataAndUpdateChart() {
+        fetch('/chart-data')
+            .then(response => response.json())
+            .then(data => {
+                const clusters = data.clusters;
+                const x = data.x;
+                const y = data.y;
+                const minDistances = data.minDistances;
+
+                const colors = [
+                    'red', 'green', 'blue', 'orange', 'purple', 'brown', 'pink', 'cyan', 'magenta', 'gray',
+                    'lime', 'teal', 'maroon', 'navy', 'salmon', 'gold', 'olive', 'darkred', 'darkgreen',
+                    'darkblue', 'lightcoral', 'lightgreen', 'lightblue', 'peachpuff', 'khaki', 'darkviolet',
+                    'mediumspringgreen', 'darkcyan', 'deepskyblue', 'plum', 'darkgoldenrod', 'firebrick',
+                    'mediumseagreen', 'steelblue', 'chocolate', 'saddlebrown', 'seagreen', 'forestgreen',
+                    'midnightblue', 'darkturquoise', 'royalblue', 'indigo', 'dimgray'
+                ];
+
+                const width = 900;
+                const height = 650;
+                const padding = 80;
+
+                const svg = d3.select("body")
+                    .append("svg")
+                    .attr("width", width)
+                    .attr("height", height);
+
+                const xScale = d3.scaleLinear()
+                    .domain([d3.min(x) - padding, d3.max(x) + padding])
+                    .range([0, width]);
+
+                const yScale = d3.scaleLinear()
+                    .domain([d3.min(y) - padding, d3.max(y) + padding])
+                    .range([height, 0]);
+
+                // Tworzymy div dla tooltipu
+                const tooltip = d3.select("body")
+                    .append("div")
+                    .attr("class", "tooltip")
+                    .style("opacity", 0);
+
+                clusters.forEach((cluster, i) => {
+                    svg.selectAll(".dot" + i)
+                        .data(Array.from(cluster).map(point => ({ x: x[point], y: y[point] })))
+                        .join("circle")
+                        .attr("class", "dot")
+                        .attr("r", 1.5)
+                        .attr("cx", d => xScale(d.x))
+                        .attr("cy", d => yScale(d.y))
+                        .style("fill", colors[i % colors.length])
+                        // Dodajemy zdarzenia myszy do pokazania / ukrycia tooltipu
+                        .on("mouseover", (event, d) => {
+                            tooltip.transition()
+                                .duration(200)
+                                .style("opacity", .9);
+                            tooltip.html("Cluster: " + (i+1) + "<br/>Points: " + clusters[i].length)
+                                .style("left", (d3.pointer(event)[0] + 5) + "px")
+                                .style("top", (d3.pointer(event)[1] - 28) + "px");
+                        })
+                        .on("mouseout", (d) => {
+                            tooltip.transition()
+                                .duration(500)
+                                .style("opacity", 0);
+                        });
+                    minDistances.forEach((pair, i) => {
+                            svg.append("line")
+                                .style("stroke", "black")
+                                .style("stroke-width", 1)
+                                .attr("x1", xScale(x[pair.point1]))
+                                .attr("y1", yScale(y[pair.point1]))
+                                .attr("x2", xScale(x[pair.point2]))
+                                .attr("y2", yScale(y[pair.point2]));
+                        });
+
+                });
+            });
+    }
+
+    fetchDataAndUpdateChart();
+
+    setInterval(fetchDataAndUpdateChart, 60000);
+    </script>
+</body>
+</html>
