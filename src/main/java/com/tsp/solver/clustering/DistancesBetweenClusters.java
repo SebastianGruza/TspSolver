@@ -5,18 +5,6 @@ import java.util.*;
 
 public class DistancesBetweenClusters {
 
-    public class PointPair {
-        int point1;
-        int point2;
-        double distance;
-
-        public PointPair(int point1, int point2, double distance) {
-            this.point1 = point1;
-            this.point2 = point2;
-            this.distance = distance;
-        }
-    }
-
     class PointPairComparator implements Comparator<PointPair> {
         public int compare(PointPair a, PointPair b) {
             if (a.distance < b.distance) return -1;

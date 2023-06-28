@@ -1,16 +1,16 @@
 package com.tsp.solver.data;
 
+import com.tsp.solver.clustering.DBSCAN;
+import com.tsp.solver.clustering.DistancesBetweenClusters;
 import com.tsp.solver.configuration.AppConfiguration;
+import scala.concurrent.impl.FutureConvertersImpl;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Random;
+import java.util.*;
 
 public class Distances {
     private String filename;
@@ -20,12 +20,21 @@ public class Distances {
     public double[] y;
     public String bestSolution = null;
 
+    public List<Set<Integer>> clusters = null;
+
     private static final double COORDINATE_SCALING_FACTOR = 0.002;
     private static final double COORDINATE_OFFSET = 0.001;
 
     public Distances(AppConfiguration tspProperties) {
-        this.filename = tspProperties.getFilename();
+        loadDistances(tspProperties.getFilename());
+    }
 
+    public Distances(String filename) {
+        loadDistances(filename);
+    }
+
+    private void loadDistances(String filename) {
+        this.filename = filename;
         List<String> allLines = loadFromFile(filename);
         if (this.filename.endsWith(".txd")) {
             parseTxdFile(allLines);
@@ -34,6 +43,19 @@ public class Distances {
         } else {
             throw new IllegalArgumentException("File format not supported");
         }
+        getClusters();
+    }
+
+    private void getClusters() {
+        DistancesBetweenClusters distancesBetweenClusters = new DistancesBetweenClusters();
+        double[] kDistances = distancesBetweenClusters.kthNearestNeighborDistances(this.distances, 6);
+        Arrays.sort(kDistances);
+        Double meanKdistance = Arrays.stream(kDistances).average().getAsDouble();
+        Double eps = meanKdistance * 2.5;
+        DBSCAN dbscan = new DBSCAN(this.distances, eps, 1);
+        clusters = dbscan.apply();
+        System.out.println("Groups: " + clusters.size());
+        System.out.println("Total points in clusters: " + clusters.stream().mapToInt(Set::size).sum());
     }
 
     private void parseTxdFile(List<String> lines) {
@@ -61,12 +83,23 @@ public class Distances {
 
     private void parseTspFile(List<String> lines) {
         int startFrom = 7;
+        int lineWithEdgeWeightType = 5;
+        String edgeWeightType = "NOT_SUPPORTED";
         List<Double> xCoord = new ArrayList<>();
         List<Double> yCoord = new ArrayList<>();
         Random rnd = new Random();
         int actualLine = 0;
         for (String line : lines) {
             if (actualLine < startFrom - 1) {
+                if (actualLine == lineWithEdgeWeightType - 1) {
+                    if (line.contains("GEO")) {
+                        edgeWeightType = "GEO";
+                    } else if (line.contains("ATT")) {
+                        edgeWeightType = "ATT";
+                    } else if (line.contains("EUC_2D")) {
+                        edgeWeightType = "EUC_2D";
+                    }
+                }
                 actualLine++;
                 continue;
             }
@@ -85,9 +118,17 @@ public class Distances {
         }
         this.n = xCoord.size();
         this.distances = new double[this.n][this.n];
-        this.x = xCoord.stream().mapToDouble(Double::doubleValue).toArray();
-        this.y = yCoord.stream().mapToDouble(Double::doubleValue).toArray();
-        calculateDistancesTsp(xCoord, yCoord, rnd);
+        this.y = xCoord.stream().mapToDouble(Double::doubleValue).toArray();
+        this.x = yCoord.stream().mapToDouble(Double::doubleValue).toArray();
+        if (edgeWeightType.equals("GEO")) {
+            distancesInGEO(xCoord, yCoord, rnd);
+        } else if (edgeWeightType.equals("ATT")) {
+            attDistance(xCoord, yCoord, rnd);
+        } else if (edgeWeightType.equals("EUC_2D")) {
+            calculateDistancesTsp(xCoord, yCoord, rnd);
+        } else {
+            throw new IllegalArgumentException("Edge weight type not supported");
+        }
     }
 
     private void calculateDistances(List<Double> xCoord, List<Double> yCoord) {
@@ -103,6 +144,51 @@ public class Distances {
             System.out.println("i: " + i);
             for (int j = 0; j < i; j++) {
                 distances[i][j] = Math.round(Math.sqrt(Math.pow(xCoord.get(i) - xCoord.get(j), 2) + Math.pow(yCoord.get(i) - yCoord.get(j), 2)))
+                        + rnd.nextDouble() * COORDINATE_SCALING_FACTOR - COORDINATE_OFFSET;
+                distances[j][i] = distances[i][j];
+            }
+            distances[i][i] = 0.0;
+        }
+    }
+
+    private void attDistance(List<Double> xCoord, List<Double> yCord, Random rnd) {
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                double x1 = xCoord.get(i);
+                double x2 = xCoord.get(j);
+                double y1 = yCord.get(i);
+                double y2 = yCord.get(j);
+                double xd = x1 - x2;
+                double yd = y1 - y2;
+                double rij = Math.sqrt((xd * xd + yd * yd) / 10.0);
+                double tij = Math.round(rij);
+                if (tij < rij)
+                    distances[i][j] = tij + 1
+                            + rnd.nextDouble() * COORDINATE_SCALING_FACTOR - COORDINATE_OFFSET;
+                else
+                    distances[i][j] = tij
+                            + rnd.nextDouble() * COORDINATE_SCALING_FACTOR - COORDINATE_OFFSET;
+                distances[j][i] = distances[i][j];
+            }
+            distances[i][i] = 0.0;
+        }
+    }
+
+    private void distancesInGEO(List<Double> xCoord, List<Double> yCoord, Random rnd) {
+        int n = xCoord.size();
+        double PI = 3.141592;
+        double RRR = 6378.388;
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                double latitude1 = xCoord.get(i) * PI / 180.0;
+                double longitude1 = yCoord.get(i) * PI / 180.0;
+                double latitude2 = xCoord.get(j) * PI / 180.0;
+                double longitude2 = yCoord.get(j) * PI / 180.0;
+
+                double q1 = Math.cos(longitude1 - longitude2);
+                double q2 = Math.cos(latitude1 - latitude2);
+                double q3 = Math.cos(latitude1 + latitude2);
+                distances[i][j] = Math.round(RRR * Math.acos(0.5 * ((1.0 + q1) * q2 - (1.0 - q1) * q3)) + 1.0)
                         + rnd.nextDouble() * COORDINATE_SCALING_FACTOR - COORDINATE_OFFSET;
                 distances[j][i] = distances[i][j];
             }

@@ -38,22 +38,38 @@
                     'midnightblue', 'darkturquoise', 'royalblue', 'indigo', 'dimgray'
                 ];
 
-                const width = 900;
-                const height = 650;
-                const padding = 80;
+                const width = 1000;
+                const height = 1500;
+                const padding = 20;
+
+                const minX = d3.min(x), maxX = d3.max(x);
+                const minY = d3.min(y), maxY = d3.max(y);
+
+                const rangeX = maxX - minX;
+                const rangeY = maxY - minY;
+
+                // Obliczamy skale bazując na zakresie danych i dostępnym miejscu na wykresie.
+                const scaleX = (width - 2 * padding) / rangeX;
+                const scaleY = (height - 2 * padding) / rangeY;
+
+                // Wybieramy najmniejszą skalę, aby zachować proporcje i zmieścić wszystko na ekranie.
+                const scale = Math.min(scaleX, scaleY);
+
+                // Tworzymy skale z nowym zakresem
+                const xScale = d3.scaleLinear()
+                    .domain([minX, maxX])
+                    .range([padding, padding + rangeX * scale]);
+
+                const heightFixed = rangeY * scale + 2 * padding;
+
+                const yScale = d3.scaleLinear()
+                    .domain([minY, maxY])
+                    .range([heightFixed - padding, heightFixed - padding - rangeY * scale]);
 
                 const svg = d3.select("body")
                     .append("svg")
                     .attr("width", width)
-                    .attr("height", height);
-
-                const xScale = d3.scaleLinear()
-                    .domain([d3.min(x) - padding, d3.max(x) + padding])
-                    .range([0, width]);
-
-                const yScale = d3.scaleLinear()
-                    .domain([d3.min(y) - padding, d3.max(y) + padding])
-                    .range([height, 0]);
+                    .attr("height", heightFixed);
 
                 // Tworzymy div dla tooltipu
                 const tooltip = d3.select("body")
@@ -66,11 +82,10 @@
                         .data(Array.from(cluster).map(point => ({ x: x[point], y: y[point] })))
                         .join("circle")
                         .attr("class", "dot")
-                        .attr("r", 1.5)
+                        .attr("r", 1.8)
                         .attr("cx", d => xScale(d.x))
                         .attr("cy", d => yScale(d.y))
                         .style("fill", colors[i % colors.length])
-                        // Dodajemy zdarzenia myszy do pokazania / ukrycia tooltipu
                         .on("mouseover", (event, d) => {
                             tooltip.transition()
                                 .duration(200)
@@ -100,7 +115,6 @@
 
     fetchDataAndUpdateChart();
 
-    setInterval(fetchDataAndUpdateChart, 60000);
     </script>
 </body>
 </html>

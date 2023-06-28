@@ -22,6 +22,16 @@ public class AppConfiguration {
     private int colonyMultiplier;
     private int divideGreedy;
 
+    private double scaleTime;
+
+    public double getScaleTime() {
+        return scaleTime;
+    }
+
+    public void setScaleTime(double scaleTime) {
+        this.scaleTime = scaleTime;
+    }
+
     public int getGpuThreads() {
         return gpuThreads;
     }

@@ -1,5 +1,6 @@
 package com.tsp.solver;
 
+import com.aparapi.Kernel;
 import com.aparapi.Range;
 import com.tsp.solver.configuration.AppConfiguration;
 import com.tsp.solver.data.Colony;
@@ -10,12 +11,19 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @SpringBootApplication
 public class TspSolverApplication implements CommandLineRunner {
@@ -25,6 +33,7 @@ public class TspSolverApplication implements CommandLineRunner {
 
     @Autowired
     AppConfiguration appConfiguration;
+
     public static void main(String[] args) {
 
         SpringApplication.run(TspSolverApplication.class, args);
@@ -35,15 +44,50 @@ public class TspSolverApplication implements CommandLineRunner {
     public void run(String... args) throws InterruptedException {
 
         Integer counterTotal = 0;
+        String filename = appConfiguration.getFilename();
         while (true) {
-            start();
-            System.out.println();
-            System.out.println("END counterTotal number " + counterTotal++);
-            System.out.println();
+            double scaleSeconds = appConfiguration.getScaleTime(); //0.01 - is optimum
+            int secondsCalculation = (int) (dist.n * Math.pow(Math.log10(dist.n), 4) * scaleSeconds) + 5;
+            try {
+                System.out.println("START with secondsCalculation " + secondsCalculation + " for " + filename);
+                String result = startAndGetBest(secondsCalculation);
+                PrintWriter out = new PrintWriter(new FileOutputStream(new File("results.txt"), true));
+                out.println("TOTAL RESULT  in " + secondsCalculation + " seconds for " + filename + " : " + result);
+                out.close();
+                System.out.println("TOTAL RESULT  in " + secondsCalculation + " seconds for " + filename + " : " + result);
+                System.out.println("END counterTotal number " + counterTotal++);
+                System.out.println();
+                filename = getNextTspFileFromActiveDirectory(filename);
+                dist = new Distances(filename);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         }
     }
 
-    public void start() throws InterruptedException {
+    private String getNextTspFileFromActiveDirectory(String lastFilename) {
+        try (Stream<java.nio.file.Path> paths = Files.list(Paths.get("."))) {
+            List<String> files = paths
+                    .filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".tsp"))
+                    .map(path -> path.getFileName().toString())
+                    .sorted()
+                    .collect(Collectors.toList());
+
+            int index = files.indexOf(lastFilename);
+            if (index >= 0 && index < files.size() - 1) {
+                String nextFile = files.get(index + 1);
+                return nextFile;
+            } else {
+                return files.get(0);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    public String startAndGetBest(Integer secondsCalculation) throws InterruptedException {
 
         final int size = appConfiguration.getGpuThreads();
         final int sizeTabu = 131072;
@@ -93,8 +137,7 @@ public class TspSolverApplication implements CommandLineRunner {
             oldResults.add(new Colony());
             bestsHistorical.add(new HashMap<>());
         }
-
-
+        String returnResult = "";
         for (int epoch = 1; epoch < epochsInMain; epoch++) {
             if (epoch > 10) {
                 onlyMutate = false;
@@ -242,7 +285,7 @@ public class TspSolverApplication implements CommandLineRunner {
                     bestsHistorical.get(bestId).putAll(actualBest);
                     bestId++;
                     bests.putAll(actualBest.entrySet().stream().sorted(Comparator.comparing(a -> a.getKey().getTotal()))
-                            .limit(1).collect(Collectors.toMap(a->a.getKey(), a->a.getValue())));
+                            .limit(1).collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue())));
                     if (epoch > 5 && colony.getIndividuals().size() < bestsHistoricalCounter / 4) {
                         for (Path pathCandidate : colony.getIndividuals().keySet()) {
                             if (countingToTabu.containsKey(pathCandidate)) {
@@ -256,14 +299,19 @@ public class TspSolverApplication implements CommandLineRunner {
                 }
 
                 Map<Path, int[]> best = bests.entrySet().stream().sorted(Comparator.comparing(a -> a.getKey().getTotal()))
-                        .limit(1).collect(Collectors.toMap(a-> a.getKey(), a->a.getValue()));
+                        .limit(1).collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue()));
                 Path bestKey = best.keySet().iterator().next();
                 System.out.println("Best path = " + bestKey);
+                returnResult = bestKey.toString();
+                if (Instant.now().isAfter(start.plusSeconds(secondsCalculation))) {
+                    return bestKey.toString();
+                }
                 String bestSolution = "";
                 for (int j = 0; j < best.get(bestKey).length; j++) {
                     System.out.print("-" + best.get(bestKey)[j]);
                     bestSolution += "-" + best.get(bestKey)[j];
-                };
+                }
+                ;
                 bestSolution = bestSolution.substring(1);
                 dist.bestSolution = bestSolution;
 
@@ -283,7 +331,9 @@ public class TspSolverApplication implements CommandLineRunner {
                     .limit(524288).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
             //System.out.println("Total unique paths in algorithm = " + allPaths.size());
         }
+        return returnResult;
     }
+
     private void checkIntegrityAndRepair(int ts, int n, int[][] path, double[] sum, Random rndGen, int[] isFaultIntegrity, int colonyMultiplier, int pm) {
         Integer faultIntegrity = Arrays.stream(isFaultIntegrity).sum();
         if (faultIntegrity > 0) {
