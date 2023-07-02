@@ -65,16 +65,16 @@ class TspGAKernel extends Kernel {
         int gid = getGlobalId();
         for (int epoch = 0; epoch < epochs; epoch++) {
             randomShift(gid);
-            cross(gid, trialsCrossover);
-            mut8(gid, 2);
-            twoOpt(gid, 12);
-            mut7(gid, 6);
-            mut5(gid, 8);
-            cross(gid, trialsCrossover);
-            mut4(gid, 10);
-            mut6(gid, 3);
-            threeOpt(gid, 4);
-            twoOpt(gid, 12);
+            crossOX(gid, trialsCrossover);
+            mutSegmentRelocation(gid, 2);
+            mutTwoOpt(gid, 12);
+            mutThreeVerticesRelocation(gid, 6);
+            mutTwoVerticesRelocation(gid, 8);
+            crossOX(gid, trialsCrossover);
+            mutSingleVertexRelocation(gid, 10);
+            mutVertexSwap(gid, 3);
+            mutThreeOpt(gid, 4);
+            mutTwoOpt(gid, 12);
 
 
             if (epoch + 1 == epochs) {
@@ -82,43 +82,42 @@ class TspGAKernel extends Kernel {
             }
         }
     }
-
-    private void mut8(int gid, int trials) {
+    private void mutSegmentRelocation(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
-            calculateMutation8(gid);
+            calculateSegmentRelocationMutation(gid);
             updateRouteInfo(gid);
         }
     }
 
-    private void mut7(int gid, int trials) {
+    private void mutThreeVerticesRelocation(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
-            calculateMutation7(gid);
+            calculateThreeVerticesRelocationMutation(gid);
             updateRouteInfo(gid);
         }
     }
 
-    private void mut5(int gid, int trials) {
+    private void mutTwoVerticesRelocation(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
-            calculateMutation5(gid);
+            calculateTwoVerticesRelocationMutation(gid);
             updateRouteInfo(gid);
         }
     }
 
-    private void mut4(int gid, int trials) {
+    private void mutSingleVertexRelocation(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
-            calculateMutation4(gid);
+            calculateSingleVertexRelocationMutation(gid);
             updateRouteInfo(gid);
         }
     }
 
-    private void mut6(int gid, int trials) {
+    private void mutVertexSwap(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
-            calculateMutation6(gid);
+            calculateVertexSwapMutation(gid);
             updateRouteInfo(gid);
         }
     }
 
-    private void cross(int gid, int trials) {
+    private void crossOX(int gid, int trials) {
         //step 3: crossover:
         for (int trial = 0; trial < trials; trial++) {
             if (pm == 4) {
@@ -132,16 +131,16 @@ class TspGAKernel extends Kernel {
         }
     }
 
-    private void threeOpt(int gid, int trials) {
+    private void mutThreeOpt(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
             calculate3OptMutation(gid);
             updateRouteInfo(gid);
         }
     }
 
-    private void twoOpt(int gid, int trials) {
+    private void mutTwoOpt(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
-            calculateMutation3(gid);
+            calculateTwoOptMutation(gid);
             updateRouteInfo(gid);
         }
     }
@@ -254,7 +253,7 @@ class TspGAKernel extends Kernel {
         }
     }
 
-    private void calculateMutation6(int gid) {
+    private void calculateVertexSwapMutation(int gid) {
         for (int el = 0; el < pm; el++) {
             int parent = pm * gid + el;
             double best = Double.MAX_VALUE;
@@ -272,9 +271,9 @@ class TspGAKernel extends Kernel {
                     rnd2 = actualRnd2;
                 }
             }
-            int zamien = gaResult[parent][rnd1];
+            int temp = gaResult[parent][rnd1];
             gaResult[parent][rnd1] = gaResult[parent][rnd2];
-            gaResult[parent][rnd2] = zamien;
+            gaResult[parent][rnd2] = temp;
         }
     }
 
@@ -303,7 +302,7 @@ class TspGAKernel extends Kernel {
         }
     }
 
-    private void calculateMutation3(int gid) {
+    private void calculateTwoOptMutation(int gid) {
         for (int el = 0; el < pm; el++) {
             int parent = pm * gid + el;
             for (int i = 0; i < n; i++) {
@@ -344,7 +343,7 @@ class TspGAKernel extends Kernel {
         }
     }
 
-    private void calculateMutation4(int gid) {
+    private void calculateSingleVertexRelocationMutation(int gid) {
         for (int el = 0; el < pm; el++) {
             int parent = pm * gid + el;
             double best = Double.MAX_VALUE;
@@ -386,7 +385,7 @@ class TspGAKernel extends Kernel {
         }
     }
 
-    private void calculateMutation7(int gid) {
+    private void calculateThreeVerticesRelocationMutation(int gid) {
         for (int el = 0; el < pm; el++) {
             int parent = pm * gid + el;
 
@@ -435,7 +434,7 @@ class TspGAKernel extends Kernel {
         }
     }
 
-    private void calculateMutation8(int gid) {
+    private void calculateSegmentRelocationMutation(int gid) {
         for (int el = 0; el < pm; el++) {
             int parent = pm * gid + el;
             for (int i = 0; i < n; i++) {
@@ -496,7 +495,7 @@ class TspGAKernel extends Kernel {
     }
 
 
-    private void calculateMutation5(int gid) {
+    private void calculateTwoVerticesRelocationMutation(int gid) {
         for (int el = 0; el < pm; el++) {
             int parent = pm * gid + el;
 
