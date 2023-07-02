@@ -3,7 +3,6 @@ package com.tsp.solver.data;
 import com.tsp.solver.clustering.DBSCAN;
 import com.tsp.solver.clustering.DistancesBetweenClusters;
 import com.tsp.solver.configuration.AppConfiguration;
-import scala.concurrent.impl.FutureConvertersImpl;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -91,7 +90,7 @@ public class Distances {
         int actualLine = 0;
         for (String line : lines) {
             if (actualLine < startFrom - 1) {
-                if (actualLine == lineWithEdgeWeightType - 1) {
+                if (line.startsWith("EDGE_WEIGHT_TYPE")) {
                     if (line.contains("GEO")) {
                         edgeWeightType = "GEO";
                     } else if (line.contains("ATT")) {
@@ -174,10 +173,10 @@ public class Distances {
         }
     }
 
-    private void distancesInGEO(List<Double> xCoord, List<Double> yCoord, Random rnd) {
+    private void distancesInGEO_Wrong(List<Double> xCoord, List<Double> yCoord, Random rnd) {
         int n = xCoord.size();
-        double PI = 3.141592;
-        double RRR = 6378.388;
+        double PI = Math.PI;
+        double RRR = 6378.388; //6427.5
         for (int i = 0; i < n; i++) {
             for (int j = i + 1; j < n; j++) {
                 double latitude1 = xCoord.get(i) * PI / 180.0;
@@ -195,6 +194,36 @@ public class Distances {
             distances[i][i] = 0.0;
         }
     }
+    public void distancesInGEO(List<Double> xCoord, List<Double> yCoord, Random rnd) {
+        int dim = xCoord.size();
+        double[] latitude = new double[dim];
+        double[] longitude = new double[dim];
+
+        final double PI = 3.141592;
+        for (int i = 0; i < dim; i++) {
+            int deg = (int) (xCoord.get(i)).doubleValue();
+            double min = xCoord.get(i) - deg;
+            latitude[i] = PI * (deg + 5 * min / 3) / 180;
+            deg = (int) yCoord.get(i).doubleValue();
+            min = yCoord.get(i) - deg;
+            longitude[i] = PI * (deg + 5 * min / 3) / 180;
+        }
+
+        final double RRR = 6378.388;
+        for (int i = 0; i < dim; i++) {
+            for (int j = i + 1; j < dim; j++) {
+                double q1 = Math.cos(longitude[i] - longitude[j]);
+                double q2 = Math.cos(latitude[i] - latitude[j]);
+                double q3 = Math.cos(latitude[i] + latitude[j]);
+                distances[i][j] = (int) (RRR * Math.acos(0.5 * ((1.0 + q1) * q2 - (1.0 - q1) * q3)) + 1.0)
+                        + rnd.nextDouble() * COORDINATE_SCALING_FACTOR - COORDINATE_OFFSET;
+                distances[j][i] = distances[i][j];
+            }
+            distances[i][i] = 0.0;
+        }
+
+    }
+
 
     private List<String> loadFromFile(String filename) {
         try {

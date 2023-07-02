@@ -1,6 +1,7 @@
 package com.tsp.solver.clustering;
 
 import com.tsp.solver.data.Distances;
+import com.tsp.solver.data.DistancesService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -11,10 +12,11 @@ import java.util.stream.Collectors;
 public class ClusteringAndKnn {
 
     @Autowired
-    private Distances dist;
+    private DistancesService distancesService;
 
     private List<PointPair> getPairs() {
         int k = 10;
+        Distances dist = distancesService.getCurrentDistances();
         DistancesBetweenClusters distancesBetweenClusters = new DistancesBetweenClusters();
         List<List<PointPair>> pointPairs = distancesBetweenClusters.findMinInterClusterDistances(dist.clusters, dist.distances, k);
         List<PointPair> result = distancesBetweenClusters.findKNearestNeighbors(dist.distances, k);

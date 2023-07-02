@@ -1,15 +1,16 @@
 package com.tsp.solver;
 
-import com.aparapi.Kernel;
 import com.aparapi.Range;
 import com.tsp.solver.configuration.AppConfiguration;
 import com.tsp.solver.data.Colony;
 import com.tsp.solver.data.Distances;
+import com.tsp.solver.data.DistancesService;
 import com.tsp.solver.data.Path;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import scala.concurrent.impl.FutureConvertersImpl;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -29,6 +30,8 @@ import java.util.stream.Stream;
 public class TspSolverApplication implements CommandLineRunner {
 
     @Autowired
+    DistancesService distancesService;
+
     Distances dist;
 
     @Autowired
@@ -45,10 +48,19 @@ public class TspSolverApplication implements CommandLineRunner {
 
         Integer counterTotal = 0;
         String filename = appConfiguration.getFilename();
+        dist = distancesService.getCurrentDistances();
+        Boolean isOKLastFile = true;
         while (true) {
             double scaleSeconds = appConfiguration.getScaleTime(); //0.01 - is optimum
-            int secondsCalculation = (int) (dist.n * Math.pow(Math.log10(dist.n), 4) * scaleSeconds) + 5;
+            int secondsCalculation = getSecondsCalculation(scaleSeconds);
             try {
+                if (!isOKLastFile) {
+                    filename = getNextTspFileFromActiveDirectory(filename);
+                    dist = new Distances(filename);
+                    distancesService.updateDistances(dist);
+                    secondsCalculation = getSecondsCalculation(scaleSeconds);
+                    isOKLastFile = true;
+                }
                 System.out.println("START with secondsCalculation " + secondsCalculation + " for " + filename);
                 String result = startAndGetBest(secondsCalculation);
                 PrintWriter out = new PrintWriter(new FileOutputStream(new File("results.txt"), true));
@@ -59,10 +71,20 @@ public class TspSolverApplication implements CommandLineRunner {
                 System.out.println();
                 filename = getNextTspFileFromActiveDirectory(filename);
                 dist = new Distances(filename);
+                distancesService.updateDistances(dist);
+            } catch (IllegalArgumentException e) {
+                isOKLastFile = false;
+                System.out.println("File " + filename + " is not OK. EDGE Type is not supported.");
+                e.printStackTrace();
             } catch (Exception e) {
                 e.printStackTrace();
             }
         }
+    }
+
+    private int getSecondsCalculation(double scaleSeconds) {
+        int secondsCalculation = (int) (dist.n * Math.pow(Math.log10(dist.n), 4) * scaleSeconds) + 5;
+        return secondsCalculation;
     }
 
     private String getNextTspFileFromActiveDirectory(String lastFilename) {
@@ -105,6 +127,8 @@ public class TspSolverApplication implements CommandLineRunner {
         final int[][] gaResult = new int[ts][n];
         final double[] gaResultSum = new double[ts];
 
+        Integer isMergeFinished = 0;
+
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < ts; j++) {
                 path[j][i] = (i + j) % n;
@@ -119,7 +143,7 @@ public class TspSolverApplication implements CommandLineRunner {
         }
         System.out.println("GreedyAlgorithm check");
         Random rndGen = new Random();
-        int epochsInGPU = 3;
+        int epochsInGPU = 2;
         int epochsInMain = 100000;
         int colonyMultiplier = appConfiguration.getColonyMultiplier();
         int bestsHistoricalCounter = size / 8;
@@ -150,7 +174,7 @@ public class TspSolverApplication implements CommandLineRunner {
             copyPathsIntoOtherTable(ts, n, path, sum, sum3, path3);
             int[] isFaultIntegrity = new int[ts];
             List<Double> tabuList = countingToTabu
-                    .entrySet().parallelStream().filter(a -> a.getValue() > 8)
+                    .entrySet().parallelStream().filter(a -> a.getValue() > 5)
                     .sorted(Comparator.comparing(a -> a.getKey().getTotal()))
                     .limit(sizeTabu)
                     .map(a -> a.getKey().getTotal()).collect(Collectors.toList());
@@ -196,7 +220,9 @@ public class TspSolverApplication implements CommandLineRunner {
             System.out.println("Unique individuals of all colonies = " + distintSum);
 
             counterMerge++;
-            if ((distintSum < ts / 32 && counterMerge > 32) || distintSum < ts / 64) {
+            Double timeToMerge = Duration.between(start, Instant.now()).toSeconds() * 1.0 / secondsCalculation;
+            if (isMergeColoniesNow(ts, counterMerge, distintSum, appConfiguration.getMergeColonyByTime(), appConfiguration.getCutoffsByTime(), timeToMerge, isMergeFinished)) {
+                isMergeFinished++;
                 counterTotalMerge++;
                 counterMerge = 0;
                 System.out.println("------> MERGE last colonies now <------");
@@ -332,6 +358,20 @@ public class TspSolverApplication implements CommandLineRunner {
             //System.out.println("Total unique paths in algorithm = " + allPaths.size());
         }
         return returnResult;
+    }
+
+    private static boolean isMergeColoniesNow(int ts, Integer counterMerge, Integer distintSum, Boolean mergeColonyByTime, List<Double> cutoffsByTime, Double timeToMerge, Integer stepMerge) {
+        System.out.println("Time to merge: " + timeToMerge);
+        Boolean old = (((distintSum < ts / 32 && counterMerge > 32) || distintSum < ts / 64));
+        if (mergeColonyByTime) {
+            if (cutoffsByTime.size() > stepMerge && cutoffsByTime.get(stepMerge) < timeToMerge) {
+                System.out.println("Step: " + stepMerge + ", time to merge: " + timeToMerge + " > " + cutoffsByTime.get(stepMerge));
+                return true;
+            } else {
+                return false;
+            }
+        }
+        return old;
     }
 
     private void checkIntegrityAndRepair(int ts, int n, int[][] path, double[] sum, Random rndGen, int[] isFaultIntegrity, int colonyMultiplier, int pm) {

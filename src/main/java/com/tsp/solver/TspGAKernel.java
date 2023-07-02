@@ -65,88 +65,101 @@ class TspGAKernel extends Kernel {
         int gid = getGlobalId();
         for (int epoch = 0; epoch < epochs; epoch++) {
             randomShift(gid);
-            //step 3: crossover:
-            for (int trial = 0; trial < trialsCrossover; trial++) {
-                if (pm == 4) {
-                    calculateCrossoverFor4(gid, trial);
-                } else if (pm == 2) {
-                    crossover(gid, 0, 1);
-                } else {
-                    //TODO:
-                }
-                calculatePathDistances(gid);
-                selectionOfIndividuals(gid);
-                randomShift(gid);
-            }
-            //step 2: mutation:
-//            for (int trial = 0; trial < trialsMutation; trial++) {
-//                calculateMutation(gid);
-//                calculatePathDistances(gid);
-//                selectionOfIndividuals(gid);
-//                randomShift(gid);
-//            }
-//
-//            for (int trial = 0; trial < trialsMutation; trial++) {
-//                calculateMutation2(gid);
-//                calculatePathDistances(gid);
-//                selectionOfIndividuals(gid);
-//                randomShift(gid);
-//            }
-
-//            for (int trial = 0; trial < trialsMutation; trial++) {
-//                calculateMutation3(gid);
-//                calculatePathDistances(gid);
-//                selectionOfIndividuals(gid);
-//                randomShift(gid);
-//            }
-
-
-            for (int trial = 0; trial < 2; trial++) {
-                calculateMutation8(gid);
-                calculatePathDistances(gid);
-                selectionOfIndividuals(gid);
-                randomShift(gid);
-            }
-
-            for (int trial = 0; trial < 12; trial++) {
-                calculateMutation7(gid);
-                calculatePathDistances(gid);
-                selectionOfIndividuals(gid);
-                randomShift(gid);
-            }
-
-            for (int trial = 0; trial < 12; trial++) {
-                calculateMutation5(gid);
-                calculatePathDistances(gid);
-                selectionOfIndividuals(gid);
-                randomShift(gid);
-            }
-
-            for (int trial = 0; trial < 12; trial++) {
-                calculateMutation3(gid);
-                calculatePathDistances(gid);
-                selectionOfIndividuals(gid);
-                randomShift(gid);
-            }
-
-            for (int trial = 0; trial < 12; trial++) {
-                calculateMutation4(gid);
-                calculatePathDistances(gid);
-                selectionOfIndividuals(gid);
-                randomShift(gid);
-            }
-
-            for (int trial = 0; trial < 12; trial++) {
-                calculateMutation6(gid);
-                calculatePathDistances(gid);
-                selectionOfIndividuals(gid);
-                randomShift(gid);
-            }
+            cross(gid, trialsCrossover);
+            mut8(gid, 2);
+            twoOpt(gid, 12);
+            mut7(gid, 6);
+            mut5(gid, 8);
+            randomShift(gid);
+            cross(gid, trialsCrossover);
+            mut4(gid, 10);
+            mut6(gid, 3);
+            threeOpt(gid, 4);
+            twoOpt(gid, 12);
 
 
             if (epoch + 1 == epochs) {
                 checkIntegrity(gid);
             }
+        }
+    }
+
+    private void mut8(int gid, int trials) {
+        for (int trial = 0; trial < trials; trial++) {
+            calculateMutation8(gid);
+            calculatePathDistances(gid);
+            selectionOfIndividuals(gid);
+            randomShift(gid);
+        }
+    }
+
+    private void mut7(int gid, int trials) {
+        for (int trial = 0; trial < trials; trial++) {
+            calculateMutation7(gid);
+            calculatePathDistances(gid);
+            selectionOfIndividuals(gid);
+            randomShift(gid);
+        }
+    }
+
+    private void mut5(int gid, int trials) {
+        for (int trial = 0; trial < trials; trial++) {
+            calculateMutation5(gid);
+            calculatePathDistances(gid);
+            selectionOfIndividuals(gid);
+            randomShift(gid);
+        }
+    }
+
+    private void mut4(int gid, int trials) {
+        for (int trial = 0; trial < trials; trial++) {
+            calculateMutation4(gid);
+            calculatePathDistances(gid);
+            selectionOfIndividuals(gid);
+            randomShift(gid);
+        }
+    }
+
+    private void mut6(int gid, int trials) {
+        for (int trial = 0; trial < trials; trial++) {
+            calculateMutation6(gid);
+            calculatePathDistances(gid);
+            selectionOfIndividuals(gid);
+            randomShift(gid);
+        }
+    }
+
+    private void cross(int gid, int trials) {
+        //step 3: crossover:
+        for (int trial = 0; trial < trials; trial++) {
+            if (pm == 4) {
+                calculateCrossoverFor4(gid, trial);
+            } else if (pm == 2) {
+                crossover(gid, 0, 1);
+            } else {
+                //TODO:
+            }
+            calculatePathDistances(gid);
+            selectionOfIndividuals(gid);
+            randomShift(gid);
+        }
+    }
+
+    private void threeOpt(int gid, int trials) {
+        for (int trial = 0; trial < trials; trial++) {
+            calculate3OptMutation(gid);
+            calculatePathDistances(gid);
+            selectionOfIndividuals(gid);
+            randomShift(gid);
+        }
+    }
+
+    private void twoOpt(int gid, int trials) {
+        for (int trial = 0; trial < trials; trial++) {
+            calculateMutation3(gid);
+            calculatePathDistances(gid);
+            selectionOfIndividuals(gid);
+            randomShift(gid);
         }
     }
 
@@ -177,6 +190,78 @@ class TspGAKernel extends Kernel {
             gaResult[parent][rnd1] = gaResult[parent][rnd2];
             gaResult[parent][rnd2] = zamien;
 
+        }
+    }
+
+    private void calculate3OptMutation(int gid) {
+        for (int el = 0; el < pm; el++) {
+            int parent = pm * gid + el;
+            for (int i = 0; i < n; i++) {
+                existedVertices[parent][i] = 0;
+            }
+            double best = Double.MAX_VALUE;
+            int rnd1 = 0;
+            int rnd2 = rnd1;
+            int rnd3 = rnd2;
+
+            for (int i = 0; i < trialMutCounter * 4; i++) {
+                float numRandom1 = random01();
+                float numRandom2 = random01();
+                float numRandom3 = random01();
+
+                int actualRnd1 = (int) (numRandom1 * (n - 6)) + 1;
+                int actualRnd2 = (int) (numRandom2 * (n - actualRnd1 - 3)) + actualRnd1 + 1;
+                int actualRnd3 = (int) (numRandom3 * (n - actualRnd2 - 2)) + actualRnd2 + 1;
+
+                double actualBest = getBestRandomVertexThreeOpt(gaResult[parent], actualRnd1, actualRnd2, actualRnd3);
+                if (actualBest < best) {
+                    best = actualBest;
+                    rnd1 = actualRnd1;
+                    rnd2 = actualRnd2;
+                    rnd3 = actualRnd3;
+                }
+            }
+
+            perform3OptSwap(parent, rnd1, rnd2, rnd3);
+
+        }
+    }
+
+    private double getBestRandomVertexThreeOpt(int[] ints, int i, int j, int k) {
+        int a = ints[i];
+        int b = ints[Next(i)];
+        int c = ints[j];
+        int d = ints[Next(j)];
+        int e = ints[k];
+        int f = ints[Next(k)];
+
+        double existingDistance = distances[a][b] + distances[c][d] + distances[e][f];
+        double newDistance1 = distances[a][c] + distances[b][e] + distances[d][f];
+
+        return newDistance1 - existingDistance;
+    }
+
+    private void perform3OptSwap(int parent, int i, int j, int k) {
+        // swapping i+1 to j
+        int m = j;
+        int n = i+1;
+        while (m >= n) {
+            int temp = gaResult[parent][n];
+            gaResult[parent][n] = gaResult[parent][m];
+            gaResult[parent][m] = temp;
+            m--;
+            n++;
+        }
+
+        // swapping j+1 to k
+        m = k;
+        n = j+1;
+        while (m >= n) {
+            int temp = gaResult[parent][n];
+            gaResult[parent][n] = gaResult[parent][m];
+            gaResult[parent][m] = temp;
+            m--;
+            n++;
         }
     }
 

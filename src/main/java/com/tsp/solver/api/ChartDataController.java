@@ -1,6 +1,7 @@
 package com.tsp.solver.api;
 
 import com.tsp.solver.data.Distances;
+import com.tsp.solver.data.DistancesService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -11,15 +12,16 @@ import java.util.*;
 public class ChartDataController {
 
     @Autowired
-    private final Distances dist;
+    private final DistancesService distancesService;
 
-    public ChartDataController(Distances dist) {
-        this.dist = dist;
+    @Autowired
+    public ChartDataController(DistancesService distancesService) {
+        this.distancesService = distancesService;
     }
-
 
     @GetMapping("/chart-data")
     public Map<String, Object> getChartData() {
+        Distances dist = distancesService.getCurrentDistances();
         List<Map<String, Object>> minDistances = new ArrayList<>();
         if (dist != null) {
             double[] x = dist.x;
