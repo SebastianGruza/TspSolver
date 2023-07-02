@@ -16,13 +16,13 @@ TspSolver is designed to solve TSP instances by optimizing the path of the trave
   - Colony merging based on specific rules
   - Tabu paths to escape local minima
 - Configurable parameters in the `application.properties` file:
-    tsp.filename: Name of the TSP problem file
-    tsp.gpuThreads: Number of GPU worker threads
-    tsp.colonyMultiplier: Number of colonies used in the problem
-    tsp.divideGreedy: Divisor for the greedy algorithm used for point division
-    tsp.scaleTime: Time constraint scaling factor
-    tsp.mergeColonyByTime: Enable colony merging based on time
-    tsp.cutoffsByTime: Time points for colony merging (e.g., 0.4, 0.65, 0.82, 0.95)
+  - `tsp.filename`: Name of the TSP problem file
+  - `tsp.gpuThreads`: Number of GPU worker threads
+  - `tsp.colonyMultiplier`: Number of colonies used in the problem
+  - `tsp.divideGreedy`: Divisor for the greedy algorithm used for point division
+  - `tsp.scaleTime`: Time constraint scaling factor
+  - `tsp.mergeColonyByTime`: Enable colony merging based on time
+  - `tsp.cutoffsByTime`: Time points for colony merging (e.g., 0.4, 0.65, 0.82, 0.95)
 
 
 ### Installation
