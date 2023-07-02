@@ -70,7 +70,6 @@ class TspGAKernel extends Kernel {
             twoOpt(gid, 12);
             mut7(gid, 6);
             mut5(gid, 8);
-            randomShift(gid);
             cross(gid, trialsCrossover);
             mut4(gid, 10);
             mut6(gid, 3);
@@ -87,45 +86,35 @@ class TspGAKernel extends Kernel {
     private void mut8(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
             calculateMutation8(gid);
-            calculatePathDistances(gid);
-            selectionOfIndividuals(gid);
-            randomShift(gid);
+            updateRouteInfo(gid);
         }
     }
 
     private void mut7(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
             calculateMutation7(gid);
-            calculatePathDistances(gid);
-            selectionOfIndividuals(gid);
-            randomShift(gid);
+            updateRouteInfo(gid);
         }
     }
 
     private void mut5(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
             calculateMutation5(gid);
-            calculatePathDistances(gid);
-            selectionOfIndividuals(gid);
-            randomShift(gid);
+            updateRouteInfo(gid);
         }
     }
 
     private void mut4(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
             calculateMutation4(gid);
-            calculatePathDistances(gid);
-            selectionOfIndividuals(gid);
-            randomShift(gid);
+            updateRouteInfo(gid);
         }
     }
 
     private void mut6(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
             calculateMutation6(gid);
-            calculatePathDistances(gid);
-            selectionOfIndividuals(gid);
-            randomShift(gid);
+            updateRouteInfo(gid);
         }
     }
 
@@ -139,28 +128,28 @@ class TspGAKernel extends Kernel {
             } else {
                 //TODO:
             }
-            calculatePathDistances(gid);
-            selectionOfIndividuals(gid);
-            randomShift(gid);
+            updateRouteInfo(gid);
         }
     }
 
     private void threeOpt(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
             calculate3OptMutation(gid);
-            calculatePathDistances(gid);
-            selectionOfIndividuals(gid);
-            randomShift(gid);
+            updateRouteInfo(gid);
         }
     }
 
     private void twoOpt(int gid, int trials) {
         for (int trial = 0; trial < trials; trial++) {
             calculateMutation3(gid);
-            calculatePathDistances(gid);
-            selectionOfIndividuals(gid);
-            randomShift(gid);
+            updateRouteInfo(gid);
         }
+    }
+
+    private void updateRouteInfo(int gid) {
+        calculatePathDistances(gid);
+        selectionOfIndividuals(gid);
+        randomShift(gid);
     }
 
     private void checkIntegrity(int gid) {
