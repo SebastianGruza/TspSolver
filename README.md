@@ -1,34 +1,33 @@
-## TspSolver
+# TspSolver
 
-TspSolver is a Java and Spring-based project that solves the Traveling Salesman Problem (TSP) using a Genetic Algorithm (GA) accelerated by APARAPI and GPU. It leverages APARAPI for GPU acceleration.
+TspSolver is a cutting-edge project leveraging the power of GPU acceleration for solving the Traveling Salesman Problem (TSP) using Genetic Algorithms (GA) and APARAPI. The project utilizes Java and the Spring Framework.
 
-### Description
+## Features
+- Reads .tsp files from the current directory.
+- Saves optimization results to "results.txt".
+- Visualizes real-time computations and the shortest path found so far at `http://127.0.0.1:8080`.
+- Innovative improvements to GA, including:
+  - Division of the population into colonies for independent calculation.
+  - Under certain rules, colonies can merge.
+  - Tabu paths to penalize certain paths for a prolonged lack of improvement, aiding escape from local minima.
 
-TspSolver is designed to solve TSP instances by optimizing the path of the traveling salesman. It reads TSP files (.tsp) from the current folder and saves the optimization results to `results.txt`. Additionally, it provides a web-based visualization of the problem being solved, along with the shortest path found so far, accessible at `http://127.0.0.1:8080`.
+## Configuration
+The project uses an `application.properties` configuration file. Here are some of the configurations:
 
-### Features
-
-- Utilizes a Genetic Algorithm (GA) with GPU acceleration through APARAPI
-- Reads TSP files and saves optimization results
-- Web-based visualization of the problem and the current best-known solution
-- Improvements over typical GAs, including:
-  - Population division into colonies computed independently
-  - Colony merging based on specific rules
-  - Tabu paths to escape local minima
-- Configurable parameters in the `application.properties` file:
-  - `tsp.filename`: Name of the TSP problem file
-  - `tsp.gpuThreads`: Number of GPU worker threads
-  - `tsp.colonyMultiplier`: Number of colonies used in the problem
-  - `tsp.divideGreedy`: Divisor for the greedy algorithm used for point division
-  - `tsp.scaleTime`: Time constraint scaling factor
-  - `tsp.mergeColonyByTime`: Enable colony merging based on time
-  - `tsp.cutoffsByTime`: Time points for colony merging (e.g., 0.4, 0.65, 0.82, 0.95)
-
+```properties
+tsp.filename=full.txd    # The problem file name
+tsp.gpuThreads=512       # The number of GPU workers to be used
+tsp.colonyMultiplier=4  # The number of colonies to be used in the problem
+tsp.divideGreedy=10     # The divisor of the greedy algorithm by which the number of points of a given problem will be divided
+tsp.scaleTime=0.01      # Time restriction scale
+tsp.mergeColonyByTime=true  # Whether to turn on the function of merging colonies according to time
+tsp.cutoffsByTime=0.4,0.65,0.82,0.95  # The time points when colonies will be merged
+```
 
 ### Installation
 
 1. Clone the repository: `git clone https://github.com/SebastianGruza/TspSolver.git`
-2. Install the required dependencies (provide instructions if necessary)
+2. Install the required dependencies
 3. Build the project in maven `mvn clean install`
 4. Configure the `application.properties` file as needed
 5. Run the application (provide instructions on how to run the project)
