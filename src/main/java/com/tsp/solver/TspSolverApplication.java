@@ -10,7 +10,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import scala.concurrent.impl.FutureConvertersImpl;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -36,6 +35,22 @@ public class TspSolverApplication implements CommandLineRunner {
 
     @Autowired
     AppConfiguration appConfiguration;
+
+    int[][] path;
+    double[] sum;
+    int[][] path2;
+    double[] sum2;
+    int[][] path3;
+    double[] sum3;
+    int[][] gaResult;
+    double[] gaResultSum;
+    int n;
+
+    Boolean onlyMutate = true;
+    Integer epochsInGPU = 20;
+    Integer size;
+    Integer pm; //path multiplier - how many paths per thread
+    Integer ts; //total size of paths
 
     public static void main(String[] args) {
 
@@ -110,23 +125,26 @@ public class TspSolverApplication implements CommandLineRunner {
     }
 
     public String startAndGetBest(Integer secondsCalculation) throws InterruptedException {
-
-        final int size = appConfiguration.getGpuThreads();
-        final int sizeTabu = 131072;
-        final int pm = 4; //path multiplier - how many paths per thread
-        final int ts = size * pm; //total size of paths
-        final int n = dist.n;
-
+        n = dist.n;
         final double[][] distances = dist.distances;
-        final int[][] path = new int[ts][n];
-        final double[] sum = new double[ts];
-        final int[][] path2 = new int[ts][n];
-        final double[] sum2 = new double[ts];
-        final int[][] path3 = new int[ts][n];
-        final double[] sum3 = new double[ts];
-        final int[][] gaResult = new int[ts][n];
-        final double[] gaResultSum = new double[ts];
-
+        size = appConfiguration.getGpuThreads();
+        final int sizeTabu = 131072;
+        if (n < 1000) {
+            phaseSecondEnable();
+        } else {
+            pm = 1; //path multiplier - how many paths per thread
+            ts = size * pm; //total size of paths
+            path = new int[ts][n];
+            sum = new double[ts];
+            path2 = new int[ts][n];
+            sum2 = new double[ts];
+            path3 = new int[ts][n];
+            sum3 = new double[ts];
+            gaResult = new int[ts][n];
+            gaResultSum = new double[ts];
+            onlyMutate = true;
+            epochsInGPU = 20;
+        }
         Integer isMergeFinished = 0;
 
         for (int i = 0; i < n; i++) {
@@ -139,11 +157,10 @@ public class TspSolverApplication implements CommandLineRunner {
         Instant start = Instant.now();
         Instant startEpoch = Instant.now();
         if (appConfiguration.getDivideGreedy() > 0) {
-            GreedyAlgorithm.CreateNewGenerationWithGreedyAlgorithm(n / appConfiguration.getDivideGreedy(), 1, distances, path, ts);
+            GreedyAlgorithm.CreateNewGenerationWithGreedyAlgorithm(n / appConfiguration.getDivideGreedy(), 16, distances, path, ts);
         }
         System.out.println("GreedyAlgorithm check");
         Random rndGen = new Random();
-        int epochsInGPU = 2;
         int epochsInMain = 100000;
         int colonyMultiplier = appConfiguration.getColonyMultiplier();
         int bestsHistoricalCounter = size / 8;
@@ -153,7 +170,6 @@ public class TspSolverApplication implements CommandLineRunner {
         }
         Integer counterMerge = 0;
         Integer counterTotalMerge = 0;
-        Boolean onlyMutate = true;
         List<Map<Path, int[]>> bestsHistorical = new ArrayList<>();
         Map<Path, Integer> countingToTabu = new HashMap<>();
         List<Colony> oldResults = new ArrayList<>(colonyMultiplier);
@@ -163,9 +179,6 @@ public class TspSolverApplication implements CommandLineRunner {
         }
         String returnResult = "";
         for (int epoch = 1; epoch < epochsInMain; epoch++) {
-            if (epoch > 10) {
-                onlyMutate = false;
-            }
             if (counterTotalMerge >= 100) {
                 break;
             }
@@ -221,7 +234,7 @@ public class TspSolverApplication implements CommandLineRunner {
 
             counterMerge++;
             Double timeToMerge = Duration.between(start, Instant.now()).toSeconds() * 1.0 / secondsCalculation;
-            if (isMergeColoniesNow(ts, counterMerge, distintSum, appConfiguration.getMergeColonyByTime(), appConfiguration.getCutoffsByTime(), timeToMerge, isMergeFinished)) {
+            if (isMergeColoniesNow(ts, counterMerge, distintSum, appConfiguration.getMergeColonyByTime(), appConfiguration.getCutoffsByTime(), timeToMerge, isMergeFinished) && !onlyMutate) {
                 isMergeFinished++;
                 counterTotalMerge++;
                 counterMerge = 0;
@@ -344,6 +357,9 @@ public class TspSolverApplication implements CommandLineRunner {
 
                 System.out.println();
                 copyPathsIntoOtherTable(ts, n, path, sum, sum2, path2);
+                if (distintSum < size / 4 && onlyMutate) {
+                    phaseSecondEnable();
+                }
                 createNextGeneration(size, pm, ts, n, path, rndGen, results, 400);
                 int colonyNumber = 0;
                 for (Set<Path> paths : allPaths) {
@@ -358,6 +374,23 @@ public class TspSolverApplication implements CommandLineRunner {
             //System.out.println("Total unique paths in algorithm = " + allPaths.size());
         }
         return returnResult;
+    }
+
+    private void phaseSecondEnable() {
+        System.out.println("------> PHASE 2 start now! <------");
+        onlyMutate = false;
+        epochsInGPU = 3;
+        size *= 2;
+        pm = 4; //path multiplier - how many paths per thread
+        ts = size * pm; //total size of paths
+        path = new int[ts][n];
+        sum = new double[ts];
+        path2 = new int[ts][n];
+        sum2 = new double[ts];
+        path3 = new int[ts][n];
+        sum3 = new double[ts];
+        gaResult = new int[ts][n];
+        gaResultSum = new double[ts];
     }
 
     private static boolean isMergeColoniesNow(int ts, Integer counterMerge, Integer distintSum, Boolean mergeColonyByTime, List<Double> cutoffsByTime, Double timeToMerge, Integer stepMerge) {
@@ -542,7 +575,7 @@ public class TspSolverApplication implements CommandLineRunner {
                                 for (int k = 0; k < pm; k++) {
                                     int[] onePath = colony.getIndividuals().get(sequence.get(selectorList.get(k)));
                                     for (int i = 0; i < n; i++) {
-                                        path[4 * j + k][i] = onePath[i];
+                                        path[pm * j + k][i] = onePath[i];
                                     }
                                 }
                             });

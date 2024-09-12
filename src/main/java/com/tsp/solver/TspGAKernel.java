@@ -66,14 +66,14 @@ class TspGAKernel extends Kernel {
         for (int epoch = 0; epoch < epochs; epoch++) {
             randomShift(gid);
             crossOX(gid, trialsCrossover);
-            mutSegmentRelocation(gid, 2);
+            mutSegmentRelocation(gid, trialsCrossover/6);
             mutTwoOpt(gid, 12);
-            mutThreeVerticesRelocation(gid, 6);
-            mutTwoVerticesRelocation(gid, 8);
+            mutThreeVerticesRelocation(gid, trialsCrossover/2);
+            mutTwoVerticesRelocation(gid, trialsCrossover/2);
             crossOX(gid, trialsCrossover);
-            mutSingleVertexRelocation(gid, 10);
-            mutVertexSwap(gid, 3);
-            mutThreeOpt(gid, 4);
+            mutSingleVertexRelocation(gid, trialsCrossover);
+            mutVertexSwap(gid, trialsCrossover/4);
+            mutThreeOpt(gid, trialsCrossover/3);
             mutTwoOpt(gid, 12);
 
 
@@ -702,7 +702,6 @@ class TspGAKernel extends Kernel {
         crossoverOne(parent1, parent2, cutPoint, cutSize);
         crossoverOne(parent2, parent1, cutPoint, cutSize);
     }
-
     private void crossoverOne(int parent1, int parent2, int cutPoint, int cutSize) {
 
         int k = cutPoint + cutSize;
