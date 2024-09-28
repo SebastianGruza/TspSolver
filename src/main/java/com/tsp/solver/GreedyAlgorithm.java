@@ -9,7 +9,7 @@ import java.util.concurrent.TimeUnit;
 
 public class GreedyAlgorithm {
 
-    public static void CreateNewGenerationWithGreedyAlgorithm(int number, int noThread, double[][] distances, int[][] path2, int ts) {
+    public static void createNewGenerationWithGreedyAlgorithm(int number, int noThread, double[][] distances, int[][] path2, int ts) {
         ExecutorService executor = Executors.newFixedThreadPool(noThread);
         int[][] path = new int[distances.length][distances.length];
 
@@ -54,7 +54,7 @@ public class GreedyAlgorithm {
         }
     }
 
-    public static void CreateNewGenerationWithGreedyAlgorithmRandom(int number, int noThread, double[][] distances, int[][] path2, int ts) {
+    public static void createNewGenerationWithGreedyAlgorithmRandom(int number, int noThread, double[][] distances, int[][] path2, int ts) {
         int start = 0; //number * noThread;
         int[][] path = new int[number][distances.length];
         Random rndGen = new Random();

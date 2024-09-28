@@ -1,43 +1,135 @@
 # TspSolver
 
-TspSolver is a cutting-edge project leveraging the power of GPU acceleration for solving the Traveling Salesman Problem (TSP) using Genetic Algorithms (GA) and APARAPI. The project utilizes Java and the Spring Framework.
+**TspSolver** is a cutting-edge project that leverages GPU acceleration to solve the Traveling Salesman Problem (TSP) using advanced Genetic Algorithms (GA) and [Aparapi](https://aparapi.github.io/). The project is developed in Java with the Spring Framework and is designed to efficiently handle large instances of TSP by utilizing the parallel processing capabilities of modern GPUs.
 
 ## Features
-- Reads .tsp files from the current directory.
-- Saves optimization results to "results.txt".
-- Visualizes real-time computations and the shortest path found so far at `http://127.0.0.1:8080`.
-- Innovative improvements to GA, including:
-  - Division of the population into colonies for independent calculation.
-  - Under certain rules, colonies can merge.
-  - Tabu paths to penalize certain paths for a prolonged lack of improvement, aiding escape from local minima.
+
+- **Dynamic .tsp File Processing**: Automatically reads `.tsp` problem files from the current directory.
+- **Result Logging**: Saves optimization results to `results.txt` for analysis and record-keeping.
+- **Real-Time Visualization**: Visualizes real-time computations and the shortest path found so far at [http://127.0.0.1:8080](http://127.0.0.1:8080).
+- **Innovative GA Enhancements**:
+  - **Population Division into Colonies**: Divides the population into multiple colonies for independent evolution, enhancing diversity.
+  - **Adaptive Colony Merging**: Colonies can merge under certain rules to share genetic material and avoid premature convergence.
+  - **Tabu Search Integration**: Implements a tabu list to penalize certain paths that show prolonged lack of improvement, helping the algorithm escape local minima.
+
+## Implementation Details
+
+### GPU Acceleration with Aparapi
+
+- **Parallel Genetic Algorithm Execution**: The core computation is offloaded to the GPU using Aparapi, allowing massive parallelism in evaluating and evolving the population.
+- **Custom Kernel Implementation**: A custom kernel (`TspGAKernel`) is written to perform GA operations directly on the GPU, significantly speeding up the computation.
+
+### Advanced Genetic Operators
+
+- **Multiple Mutation Strategies**: Implements a rich set of mutation operators to explore the solution space effectively:
+  - **Segment Relocation (`mutSegmentRelocation`)**: Moves a segment of the route to a different position.
+  - **Three Vertices Relocation (`mutThreeVerticesRelocation`)**: Relocates three cities simultaneously.
+  - **Two Vertices Relocation (`mutTwoVerticesRelocation`)**: Relocates two cities to new positions.
+  - **Single Vertex Relocation (`mutSingleVertexRelocation`)**: Moves a single city within the route.
+  - **Vertex Swap (`mutVertexSwap`)**: Swaps the positions of two cities.
+  - **2-Opt Heuristic (`mutTwoOpt`)**: Reverses a segment of the route to eliminate crossings.
+  - **3-Opt Heuristic (`mutThreeOpt`)**: Removes three edges and reconnects the segments in a different way to reduce the total distance.
+
+- **Adaptive Mutation Rates**: The number of mutation trials and the selection of mutation operators are dynamically adjusted based on the problem size and the current state of the population.
+
+### Enhanced Crossover Mechanisms
+
+- **Order Crossover (OX) Implementation**: Custom crossover operators are designed to preserve relative city positions and promote diversity in offspring.
+- **Adaptive Crossover Selection**: The algorithm varies crossover pairs and points dynamically to explore new regions of the solution space.
+
+### Tabu Search Integration
+
+- **Tabu List with BST Implementation**: A Binary Search Tree (BST) is used to implement the tabu list efficiently on the GPU, penalizing paths that have been recently explored.
+- **Penalization Mechanism**: Paths found in the tabu list receive a slight penalty, encouraging the algorithm to explore alternative solutions.
+
+### Custom Random Number Generator
+
+- **GPU-Optimized PRNG**: A custom pseudo-random number generator based on XORShift is implemented within the kernel to ensure efficient and independent random sequences across GPU threads.
+- **Thread-Safe Randomness**: Each thread maintains its own state, preventing correlation between random numbers generated in different threads.
+
+### Efficient Memory Management
+
+- **Preallocated Data Structures**: All necessary arrays and matrices are preallocated to minimize memory allocation overhead during kernel execution.
+- **Thread-Local Storage**: Data structures are designed to avoid shared state between threads, enhancing parallel execution efficiency.
+- **Avoidance of Dynamic Memory Allocation**: The kernel avoids dynamic memory allocation to comply with GPU execution constraints and to optimize performance.
+
+### Population Management Strategies
+
+- **Colony-Based Evolution**: The population is divided into multiple colonies that evolve independently, promoting diversity and reducing the risk of premature convergence.
+- **Adaptive Colony Merging**: Colonies can merge based on predefined criteria (e.g., elapsed time or stagnation), allowing the sharing of genetic material and injecting diversity.
+- **Historical Best Paths**: Maintains a history of the best paths found to guide the evolution and prevent the loss of high-quality solutions.
+
+### Integrity Checks and Validation
+
+- **Integrity Verification**: Implements checks to ensure that each route is valid, containing all cities exactly once.
+- **Error Correction Mechanisms**: Automatically repairs invalid routes detected during integrity checks.
 
 ## Configuration
-The project uses an `application.properties` configuration file. Here are some of the configurations:
+
+The project uses an `application.properties` configuration file. Below are key configuration options:
 
 ```properties
-tsp.filename=full.txd    # The problem file name
-tsp.gpuThreads=512       # The number of GPU workers to be used
-tsp.colonyMultiplier=4  # The number of colonies to be used in the problem
-tsp.divideGreedy=10     # The divisor of the greedy algorithm by which the number of points of a given problem will be divided
-tsp.scaleTime=0.01      # Time restriction scale
-tsp.mergeColonyByTime=true  # Whether to turn on the function of merging colonies according to time
-tsp.cutoffsByTime=0.4,0.65,0.82,0.95  # The time points when colonies will be merged
+tsp.filename=full.tsp         # The problem file name
+tsp.gpuThreads=512            # The number of GPU threads to be used
+tsp.colonyMultiplier=4        # The number of colonies to divide the population into
+tsp.divideGreedy=10           # The divisor for the greedy algorithm to initialize the population
+tsp.scaleTime=0.01            # Time scaling factor for computation duration
+tsp.mergeColonyByTime=true    # Enable merging of colonies based on elapsed time
+tsp.cutoffsByTime=0.4,0.65,0.82,0.95  # Time points (as a fraction of total time) when colonies will merge
 ```
 
-### Installation
+## Installation
 
-1. Clone the repository: `git clone https://github.com/SebastianGruza/TspSolver.git`
-2. Install the required dependencies
-3. Build the project in maven `mvn clean install`
-4. Configure the `application.properties` file as needed
-5. Run the application (provide instructions on how to run the project)
+1. **Clone the repository**:
 
-### Usage
+   ```bash
+   git clone https://github.com/SebastianGruza/TspSolver.git
+   ```
 
-1. Place the TSP problem file in the project folder
-2. Configure the desired parameters in `application.properties`
-3. Run the application to start the TSP solving process
-4. Access `http://127.0.0.1:8080` to visualize the problem and the current best-known solution
+2. **Install required dependencies**:
+
+   Ensure you have Java and Maven installed. Install any additional dependencies as specified in the `pom.xml` file.
+
+3. **Build the project**:
+
+   ```bash
+   mvn clean install
+   ```
+
+4. **Configure the application**:
+
+   Edit the `application.properties` file to set your desired configuration options.
+
+5. **Run the application**:
+
+   ```bash
+   java -jar target/tsp-solver-1.0.jar
+   ```
+
+## Usage
+
+1. **Prepare the TSP problem file**:
+
+   - Place your `.tsp` problem file in the project folder.
+   - Ensure the filename matches the `tsp.filename` property in `application.properties`.
+
+2. **Configure parameters**:
+
+   - Adjust settings in `application.properties` to suit your needs (e.g., GPU threads, colony multiplier).
+
+3. **Start the TSP solving process**:
+
+   - Run the application using the command provided in the installation section.
+
+4. **Visualize the solution**:
+
+   - Open your web browser and navigate to [http://127.0.0.1:8080](http://127.0.0.1:8080) to see the current best-known solution and real-time computation progress.
+
+## Results and Performance
+
+- **Scalability**: The application is designed to handle large TSP instances efficiently by leveraging GPU acceleration and advanced GA techniques.
+- **Quality of Solutions**: Through the use of multiple mutation operators and adaptive strategies, the algorithm consistently finds high-quality solutions.
+- **Performance Metrics**: Detailed logs and results are saved to `results.txt`, allowing you to analyze the algorithm's performance over time.
 
 ### Some results (TSP_LIB)
 

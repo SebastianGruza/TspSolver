@@ -1,6 +1,10 @@
 package com.tsp.solver;
 
+import com.aparapi.Kernel;
 import com.aparapi.Range;
+import com.aparapi.device.Device;
+import com.aparapi.device.OpenCLDevice;
+import com.aparapi.internal.kernel.KernelManager;
 import com.tsp.solver.configuration.AppConfiguration;
 import com.tsp.solver.data.Colony;
 import com.tsp.solver.data.Distances;
@@ -22,6 +26,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -31,62 +36,61 @@ public class TspSolverApplication implements CommandLineRunner {
     @Autowired
     DistancesService distancesService;
 
-    Distances dist;
+    Distances distancesData;
 
     @Autowired
     AppConfiguration appConfiguration;
 
-    int[][] path;
-    double[] sum;
-    int[][] path2;
-    double[] sum2;
-    int[][] path3;
-    double[] sum3;
-    int[][] gaResult;
-    double[] gaResultSum;
-    int n;
+    int[][] paths;
+    double[] pathTotals;
+    int[][] pathsCopy;
+    double[] pathTotalsCopy;
+    int[][] pathsAux;
+    double[] pathTotalsAux;
+    int[][] gaResultPaths;
+    double[] gaResultTotals;
+    int numberOfCities;
 
-    Boolean onlyMutate = true;
-    Integer epochsInGPU = 20;
-    Integer size;
-    Integer pm; //path multiplier - how many paths per thread
-    Integer ts; //total size of paths
+    boolean onlyMutate = true;
+    int epochsInGPU = 20;
+    int gpuThreads;
+    int pathsPerThread; // How many paths per thread
+    int totalPaths; // Total number of paths
 
     public static void main(String[] args) {
-
         SpringApplication.run(TspSolverApplication.class, args);
-
     }
 
     @Override
     public void run(String... args) throws InterruptedException {
-
-        Integer counterTotal = 0;
+        int counterTotal = 0;
         String filename = appConfiguration.getFilename();
-        dist = distancesService.getCurrentDistances();
-        Boolean isOKLastFile = true;
+        distancesData = distancesService.getCurrentDistances();
+        boolean isOKLastFile = true;
+
         while (true) {
-            double scaleSeconds = appConfiguration.getScaleTime(); //0.01 - is optimum
+            double scaleSeconds = appConfiguration.getScaleTime(); // 0.01 - is optimum
             int secondsCalculation = getSecondsCalculation(scaleSeconds);
+
             try {
                 if (!isOKLastFile) {
                     filename = getNextTspFileFromActiveDirectory(filename);
-                    dist = new Distances(filename);
-                    distancesService.updateDistances(dist);
+                    distancesData = new Distances(filename);
+                    distancesService.updateDistances(distancesData);
                     secondsCalculation = getSecondsCalculation(scaleSeconds);
                     isOKLastFile = true;
                 }
                 System.out.println("START with secondsCalculation " + secondsCalculation + " for " + filename);
                 String result = startAndGetBest(secondsCalculation);
                 PrintWriter out = new PrintWriter(new FileOutputStream(new File("results.txt"), true));
-                out.println("TOTAL RESULT  in " + secondsCalculation + " seconds for " + filename + " : " + result);
+                out.println("TOTAL RESULT in " + secondsCalculation + " seconds for " + filename + " : " + result);
                 out.close();
-                System.out.println("TOTAL RESULT  in " + secondsCalculation + " seconds for " + filename + " : " + result);
+                System.out.println("TOTAL RESULT in " + secondsCalculation + " seconds for " + filename + " : " + result);
                 System.out.println("END counterTotal number " + counterTotal++);
                 System.out.println();
                 filename = getNextTspFileFromActiveDirectory(filename);
-                dist = new Distances(filename);
-                distancesService.updateDistances(dist);
+                distancesData = new Distances(filename);
+                distancesService.updateDistances(distancesData);
             } catch (IllegalArgumentException e) {
                 isOKLastFile = false;
                 System.out.println("File " + filename + " is not OK. EDGE Type is not supported.");
@@ -98,8 +102,7 @@ public class TspSolverApplication implements CommandLineRunner {
     }
 
     private int getSecondsCalculation(double scaleSeconds) {
-        int secondsCalculation = (int) (dist.n * Math.pow(Math.log10(dist.n), 4) * scaleSeconds) + 5;
-        return secondsCalculation;
+        return (int) (distancesData.n * Math.pow(Math.log10(distancesData.n), 4) * scaleSeconds) + 5;
     }
 
     private String getNextTspFileFromActiveDirectory(String lastFilename) {
@@ -113,8 +116,7 @@ public class TspSolverApplication implements CommandLineRunner {
 
             int index = files.indexOf(lastFilename);
             if (index >= 0 && index < files.size() - 1) {
-                String nextFile = files.get(index + 1);
-                return nextFile;
+                return files.get(index + 1);
             } else {
                 return files.get(0);
             }
@@ -124,476 +126,410 @@ public class TspSolverApplication implements CommandLineRunner {
         return null;
     }
 
-    public String startAndGetBest(Integer secondsCalculation) throws InterruptedException {
-        n = dist.n;
-        final double[][] distances = dist.distances;
-        size = appConfiguration.getGpuThreads();
-        final int sizeTabu = 131072;
-        if (n < 1000) {
-            phaseSecondEnable();
+    public String startAndGetBest(int secondsCalculation) throws InterruptedException {
+        numberOfCities = distancesData.n;
+        final double[][] distances = distancesData.distances;
+        gpuThreads = appConfiguration.getGpuThreads();
+        final int tabuListSize = 131072;
+
+        if (numberOfCities < 1000) {
+            enableSecondPhase();
         } else {
-            pm = 1; //path multiplier - how many paths per thread
-            ts = size * pm; //total size of paths
-            path = new int[ts][n];
-            sum = new double[ts];
-            path2 = new int[ts][n];
-            sum2 = new double[ts];
-            path3 = new int[ts][n];
-            sum3 = new double[ts];
-            gaResult = new int[ts][n];
-            gaResultSum = new double[ts];
+            pathsPerThread = 1;
+            totalPaths = gpuThreads * pathsPerThread;
+            initializePaths();
             onlyMutate = true;
             epochsInGPU = 20;
         }
-        Integer isMergeFinished = 0;
+        int mergeFinishedCount = 0;
 
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < ts; j++) {
-                path[j][i] = (i + j) % n;
-            }
-        }
+        initializePopulation();
 
         System.out.println("START");
-        Instant start = Instant.now();
-        Instant startEpoch = Instant.now();
+        Instant startTime = Instant.now();
+        Instant epochStartTime = Instant.now();
+
         if (appConfiguration.getDivideGreedy() > 0) {
-            GreedyAlgorithm.CreateNewGenerationWithGreedyAlgorithm(n / appConfiguration.getDivideGreedy(), 16, distances, path, ts);
+            GreedyAlgorithm.createNewGenerationWithGreedyAlgorithm(numberOfCities / appConfiguration.getDivideGreedy(), 16, distances, paths, totalPaths);
         }
         System.out.println("GreedyAlgorithm check");
-        Random rndGen = new Random();
-        int epochsInMain = 100000;
+
+        Random randomGenerator = new Random();
+        int maxEpochs = 100000;
         int colonyMultiplier = appConfiguration.getColonyMultiplier();
-        int bestsHistoricalCounter = size / 8;
+        int bestsHistoricalCounter = gpuThreads / 8;
         List<Set<Path>> allPaths = new ArrayList<>();
         for (int i = 0; i < colonyMultiplier; i++) {
             allPaths.add(new HashSet<>());
         }
-        Integer counterMerge = 0;
-        Integer counterTotalMerge = 0;
+        int mergeCounter = 0;
+        int totalMergeCounter = 0;
         List<Map<Path, int[]>> bestsHistorical = new ArrayList<>();
         Map<Path, Integer> countingToTabu = new HashMap<>();
-        List<Colony> oldResults = new ArrayList<>(colonyMultiplier);
+        List<Colony> previousResults = new ArrayList<>(colonyMultiplier);
         for (int i = 0; i < colonyMultiplier; i++) {
-            oldResults.add(new Colony());
+            previousResults.add(new Colony());
             bestsHistorical.add(new HashMap<>());
         }
         String returnResult = "";
-        for (int epoch = 1; epoch < epochsInMain; epoch++) {
-            if (counterTotalMerge >= 100) {
+
+        for (int epoch = 1; epoch < maxEpochs; epoch++) {
+            if (totalMergeCounter >= 100) {
                 break;
             }
             System.out.println("Start epoch " + epoch);
 
-            copyPathsIntoOtherTable(ts, n, path, sum, sum3, path3);
-            int[] isFaultIntegrity = new int[ts];
-            List<Double> tabuList = countingToTabu
-                    .entrySet().parallelStream().filter(a -> a.getValue() > 5)
+            copyPaths(totalPaths, numberOfCities, paths, pathTotals, pathsAux, pathTotalsAux);
+            int[] integrityFaults = new int[totalPaths];
+
+            List<Double> tabuList = countingToTabu.entrySet().parallelStream()
+                    .filter(a -> a.getValue() > 5)
                     .sorted(Comparator.comparing(a -> a.getKey().getTotal()))
-                    .limit(sizeTabu)
-                    .map(a -> a.getKey().getTotal()).collect(Collectors.toList());
-            int countTabu = tabuList.size();
-            if (countTabu > 0) {
+                    .limit(tabuListSize)
+                    .map(a -> a.getKey().getTotal())
+                    .collect(Collectors.toList());
+            int tabuCount = tabuList.size();
+            if (tabuCount > 0) {
                 System.out.println("Tabu best path: " + tabuList.get(0));
             }
-            int depthBst = countTabu == 0 ? 0 : 32 - Integer.numberOfLeadingZeros(countTabu - 1);
-            depthBst = Math.max(1, depthBst);
-            int sizeBst = (1 << depthBst) - 1;
-            System.out.println("Tabu path total: " + countTabu);
-            if (countTabu < sizeBst) {
-                int elementsToAdd = sizeBst - countTabu;
+            int bstDepth = tabuCount == 0 ? 0 : 32 - Integer.numberOfLeadingZeros(tabuCount - 1);
+            bstDepth = Math.max(1, bstDepth);
+            int bstSize = (1 << bstDepth) - 1;
+            System.out.println("Tabu path total: " + tabuCount);
+            if (tabuCount < bstSize) {
+                int elementsToAdd = bstSize - tabuCount;
                 for (int i = 0; i < elementsToAdd; i++) {
-                    tabuList.add(Double.MAX_VALUE);
+                    tabuList.add(Double.valueOf(Double.MAX_VALUE));
                 }
             }
 
-            double bstTable[] = createBst(tabuList, depthBst, sizeBst);
+            double[] bstTable = createBst(tabuList, bstDepth, bstSize);
 
-            Integer trialsCrossover = onlyMutate ? 0 : 12;
-            Instant end = Instant.now();
-            Duration timeElapsedEpoch = Duration.between(startEpoch, end);
-            System.out.println("Time taken preEpoch on CPU: " + timeElapsedEpoch.toMillis() + " milliseconds,");
-            System.out.println("End CPU calculation ");
-            startEpoch = Instant.now();
-            TspGAKernel kernelGPU = new TspGAKernel(sum, path, gaResultSum, gaResult, distances, size, n, pm, epochsInGPU, isFaultIntegrity, trialsCrossover, trialsCrossover * 2, epoch, bstTable, depthBst);
-            //kernelGPU.setExecutionMode(Kernel.EXECUTION_MODE.JTP);
-            kernelGPU.execute(Range.create(size));
-            kernelGPU.dispose();
-            checkIntegrityAndRepair(ts, n, path, sum, rndGen, isFaultIntegrity, colonyMultiplier, pm);
-            end = Instant.now();
-            Duration timeElapsed = Duration.between(start, end);
-            timeElapsedEpoch = Duration.between(startEpoch, end);
-            System.out.println("Time taken epochsInGPU = " + epochsInGPU + " on GPU: " + timeElapsedEpoch.toMillis() + " milliseconds,");
-            System.out.println("Total: " + timeElapsed.toSeconds() + " seconds");
-            System.out.println("End GPU calculation ");
-            startEpoch = Instant.now();
-            List<Colony> results = postEpochProcessing(ts, path, sum, epoch, colonyMultiplier);
+            int crossoverTrials = onlyMutate ? 0 : 12;
+            Instant currentTime = Instant.now();
+            Duration epochDuration = Duration.between(epochStartTime, currentTime);
+            System.out.println("Time taken preEpoch on CPU: " + epochDuration.toMillis() + " milliseconds,");
+            System.out.println("End CPU calculation");
+            epochStartTime = Instant.now();
 
-            List<Integer> distinct = results.stream().map(c -> c.getIndividuals().size()).collect(Collectors.toList());
-            Integer distintSum = distinct.stream().mapToInt(a -> a).sum();
-            System.out.println("Unique individuals of all colonies = " + distintSum);
+            List<OpenCLDevice> gpuDevices = OpenCLDevice.listDevices(Device.TYPE.GPU);
 
-            counterMerge++;
-            Double timeToMerge = Duration.between(start, Instant.now()).toSeconds() * 1.0 / secondsCalculation;
-            if (isMergeColoniesNow(ts, counterMerge, distintSum, appConfiguration.getMergeColonyByTime(), appConfiguration.getCutoffsByTime(), timeToMerge, isMergeFinished) && !onlyMutate) {
-                isMergeFinished++;
-                counterTotalMerge++;
-                counterMerge = 0;
+            if (gpuDevices.size() > 0) {
+                // Wyświetl dostępne GPU
+                for (int i = 0; i < gpuDevices.size(); i++) {
+                    System.out.println("GPU Device " + i + ": " + gpuDevices.get(i).getShortDescription());
+                }
+
+                // Wybierz GPU o określonym indeksie
+                int deviceIndex = 0; // Zmień na 1, jeśli chcesz użyć drugiego GPU
+                OpenCLDevice selectedDevice = gpuDevices.get(deviceIndex);
+                System.out.println("Wybrano GPU: " + selectedDevice.getShortDescription());
+
+                // Ustaw preferowane urządzenia globalnie
+                LinkedHashSet<Device> preferredDevices = new LinkedHashSet<>();
+                preferredDevices.add(selectedDevice);
+                KernelManager.instance().setDefaultPreferredDevices(preferredDevices);
+                TspGAKernel kernelGPU = new TspGAKernel(pathTotals, paths, gaResultTotals, gaResultPaths, distances, gpuThreads, numberOfCities, pathsPerThread, epochsInGPU, integrityFaults, crossoverTrials, crossoverTrials * 2, epoch, bstTable, bstDepth);
+
+                // Ustaw tryb wykonania na GPU
+                kernelGPU.setExecutionMode(Kernel.EXECUTION_MODE.GPU);
+
+                // Wykonaj kernel
+                kernelGPU.execute(Range.create(gpuThreads));
+                kernelGPU.dispose();
+            } else {
+                throw new RuntimeException("Nie znaleziono żadnych urządzeń GPU.");
+            }
+
+            checkAndRepairIntegrity(totalPaths, numberOfCities, paths, pathTotals, randomGenerator, integrityFaults, colonyMultiplier, pathsPerThread);
+
+            currentTime = Instant.now();
+            Duration totalDuration = Duration.between(startTime, currentTime);
+            epochDuration = Duration.between(epochStartTime, currentTime);
+            System.out.println("Time taken epochsInGPU = " + epochsInGPU + " on GPU: " + epochDuration.toMillis() + " milliseconds,");
+            System.out.println("Total: " + totalDuration.toSeconds() + " seconds");
+            System.out.println("End GPU calculation");
+            epochStartTime = Instant.now();
+
+            List<Colony> results = postEpochProcessing(totalPaths, paths, pathTotals, epoch, colonyMultiplier);
+
+            List<Integer> uniqueCounts = results.stream().map(c -> (Integer) c.getIndividuals().size()).collect(Collectors.toList());
+            int totalUnique = uniqueCounts.stream().mapToInt(a -> a).sum();
+            System.out.println("Unique individuals of all colonies = " + totalUnique);
+
+            mergeCounter++;
+            double mergeTimeRatio = Duration.between(startTime, Instant.now()).toSeconds() * 1.0 / secondsCalculation;
+            if (shouldMergeColonies(totalPaths, mergeCounter, totalUnique, appConfiguration.getMergeColonyByTime(), appConfiguration.getCutoffsByTime(), mergeTimeRatio, mergeFinishedCount) && !onlyMutate) {
+                mergeFinishedCount++;
+                totalMergeCounter++;
+                mergeCounter = 0;
                 System.out.println("------> MERGE last colonies now <------");
                 onlyMutate = false;
-                Colony total = new Colony();
-                Integer bestId = 0;
+                Colony totalColony = new Colony();
+                int bestId = 0;
                 for (Colony colony : results) {
                     if (epoch > 20 && colony.getIndividuals().size() < bestsHistoricalCounter / 4) {
                         Map<Path, int[]> actualBest = bestsHistorical.get(bestId).entrySet().stream()
                                 .sorted(Comparator.comparing(a -> a.getKey().getTotal()))
-                                .limit(bestsHistoricalCounter).collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue()));
+                                .limit(bestsHistoricalCounter)
+                                .collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue()));
                         for (Path pathCandidate : colony.getIndividuals().keySet()) {
-                            if (countingToTabu.containsKey(pathCandidate)) {
-                                countingToTabu.put(pathCandidate, countingToTabu.get(pathCandidate) + 1);
-                            } else {
-                                countingToTabu.put(pathCandidate, 1);
-                            }
+                            countingToTabu.merge(pathCandidate, 1, Integer::sum);
                         }
                         colony.getIndividuals().putAll(actualBest);
                     }
-                    total = new Colony(total, colony);
+                    totalColony = new Colony(totalColony, colony);
                 }
-                List<Colony> oneBigColony = new ArrayList<>();
-                oneBigColony.add(total);
-                copyPathsIntoOtherTable(ts, n, path, sum, sum2, path2);
-                createNextGeneration(size, pm, ts, n, path, rndGen, oneBigColony, 40);
-//                allPaths.addAll(oneBigColony.stream()
-//                        .map(a -> a.getIndividuals().keySet())
-//                        .flatMap(a -> a.stream())
-//                        .collect(Collectors.toList()));
+                List<Colony> oneBigColony = Collections.singletonList(totalColony);
+                copyPaths(totalPaths, numberOfCities, paths, pathTotals, pathsCopy, pathTotalsCopy);
+                createNextGeneration(gpuThreads, pathsPerThread, totalPaths, numberOfCities, paths, randomGenerator, oneBigColony, 40);
             } else {
-                int i = 0;
+                // Additional processing if not merging colonies
+                int bestId = 0;
+                Map<Path, int[]> bestPathsMap = new HashMap<>();
                 for (Colony colony : results) {
-                    int j = 0;
-                    for (Colony colony2 : results) {
-                        Set<Path> intersection = new HashSet<>(colony.getIndividuals().keySet());
-                        intersection.retainAll(colony2.getIndividuals().keySet());
-                        Integer intersectionSum = intersection.size();
-                        System.out.print(String.format(" %5d", intersectionSum));
-//                        if (i < j && epoch % 10 == 5) {
-//                            colony.setIndividuals(colony.getIndividuals()
-//                                    .entrySet().stream().filter(a -> !intersection.contains(a.getKey()))
-//                                    .collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue())));
-//                        }
-                        j++;
-                    }
-                    i++;
-                    System.out.println();
-                }
-                System.out.println("Intersection with all historical paths");
-                i = 0;
-                for (Colony colony : results) {
-                    int j = 0;
-                    for (Set<Path> colony2 : allPaths) {
-                        Set<Path> intersection = new HashSet<>(colony.getIndividuals().keySet());
-                        intersection.retainAll(colony2);
-                        Integer intersectionSum = intersection.size();
-                        System.out.print(String.format(" %5d", intersectionSum));
-//                        if (i != j && epoch % 10 == 5) {
-//                            colony.setIndividuals(colony.getIndividuals()
-//                                    .entrySet().stream().filter(a -> !intersection.contains(a.getKey()))
-//                                    .collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue())));
-//                        }
-                        j++;
-                    }
-
-                    i++;
-                    System.out.println();
-                }
-                //System.out.println("Intersect with existed all paths:");
-                Integer bestId = 0;
-                Map<Path, int[]> bests = new HashMap<>();
-                for (Colony colony : results) {
-//                    for (Set<Path> paths : allPaths) {
-//                        Set<Path> intersection = new HashSet<>(colony.getIndividuals().keySet());
-//                        intersection.retainAll(paths);
-//                        Integer intersectionSum = intersection.size();
-//                        System.out.print(String.format(" %5d", intersectionSum));
-//                    }
-//                    System.out.println();
                     bestsHistorical.get(bestId).putAll(colony.getIndividuals());
                     Map<Path, int[]> actualBest = bestsHistorical.get(bestId).entrySet().stream()
                             .sorted(Comparator.comparing(a -> a.getKey().getTotal()))
-                            .limit(bestsHistoricalCounter).collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue()));
+                            .limit(bestsHistoricalCounter)
+                            .collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue()));
                     bestsHistorical.get(bestId).clear();
                     bestsHistorical.get(bestId).putAll(actualBest);
                     bestId++;
-                    bests.putAll(actualBest.entrySet().stream().sorted(Comparator.comparing(a -> a.getKey().getTotal()))
-                            .limit(1).collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue())));
+                    bestPathsMap.putAll(actualBest.entrySet().stream().sorted(Comparator.comparing(a -> a.getKey().getTotal()))
+                            .limit(1).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
                     if (epoch > 5 && colony.getIndividuals().size() < bestsHistoricalCounter / 4) {
                         for (Path pathCandidate : colony.getIndividuals().keySet()) {
-                            if (countingToTabu.containsKey(pathCandidate)) {
-                                countingToTabu.put(pathCandidate, countingToTabu.get(pathCandidate) + 1);
-                            } else {
-                                countingToTabu.put(pathCandidate, 1);
-                            }
+                            countingToTabu.merge(pathCandidate, 1, Integer::sum);
                         }
                         colony.getIndividuals().putAll(actualBest);
                     }
                 }
 
-                Map<Path, int[]> best = bests.entrySet().stream().sorted(Comparator.comparing(a -> a.getKey().getTotal()))
-                        .limit(1).collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue()));
-                Path bestKey = best.keySet().iterator().next();
-                System.out.println("Best path = " + bestKey);
-                returnResult = bestKey.toString();
-                if (Instant.now().isAfter(start.plusSeconds(secondsCalculation))) {
-                    return bestKey.toString();
+                Map<Path, int[]> bestPathEntry = bestPathsMap.entrySet().stream().sorted(Comparator.comparing(a -> a.getKey().getTotal()))
+                        .limit(1).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+                Path bestPath = bestPathEntry.keySet().iterator().next();
+                System.out.println("Best path = " + bestPath);
+                returnResult = bestPath.toString();
+                if (Instant.now().isAfter(startTime.plusSeconds(secondsCalculation))) {
+                    return bestPath.toString();
                 }
-                String bestSolution = "";
-                for (int j = 0; j < best.get(bestKey).length; j++) {
-                    System.out.print("-" + best.get(bestKey)[j]);
-                    bestSolution += "-" + best.get(bestKey)[j];
+                StringBuilder bestSolution = new StringBuilder();
+                for (int city : bestPathEntry.get(bestPath)) {
+                    bestSolution.append("-").append(city);
                 }
-                ;
-                bestSolution = bestSolution.substring(1);
-                dist.bestSolution = bestSolution;
-
-
+                distancesData.bestSolution = bestSolution.substring(1);
                 System.out.println();
-                copyPathsIntoOtherTable(ts, n, path, sum, sum2, path2);
-                if (distintSum < size / 4 && onlyMutate) {
-                    phaseSecondEnable();
+
+                copyPaths(totalPaths, numberOfCities, paths, pathTotals, pathsCopy, pathTotalsCopy);
+                if (totalUnique < gpuThreads / 4 && onlyMutate) {
+                    enableSecondPhase();
                 }
-                createNextGeneration(size, pm, ts, n, path, rndGen, results, 400);
-                int colonyNumber = 0;
-                for (Set<Path> paths : allPaths) {
-                    paths.addAll(results.get(colonyNumber).getIndividuals().keySet());
-                    colonyNumber++;
+                createNextGeneration(gpuThreads, pathsPerThread, totalPaths, numberOfCities, paths, randomGenerator, results, 400);
+                int colonyIndex = 0;
+                for (Set<Path> pathSet : allPaths) {
+                    pathSet.addAll(results.get(colonyIndex).getIndividuals().keySet());
+                    colonyIndex++;
                 }
             }
-            countingToTabu = countingToTabu
-                    .entrySet().parallelStream()
+            countingToTabu = countingToTabu.entrySet().parallelStream()
                     .sorted(Comparator.comparing(a -> a.getKey().getTotal()))
-                    .limit(524288).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-            //System.out.println("Total unique paths in algorithm = " + allPaths.size());
+                    .limit(524288)
+                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
         }
         return returnResult;
     }
 
-    private void phaseSecondEnable() {
+    private void initializePaths() {
+        paths = new int[totalPaths][numberOfCities];
+        pathTotals = new double[totalPaths];
+        pathsCopy = new int[totalPaths][numberOfCities];
+        pathTotalsCopy = new double[totalPaths];
+        pathsAux = new int[totalPaths][numberOfCities];
+        pathTotalsAux = new double[totalPaths];
+        gaResultPaths = new int[totalPaths][numberOfCities];
+        gaResultTotals = new double[totalPaths];
+    }
+
+    private void initializePopulation() {
+        for (int i = 0; i < numberOfCities; i++) {
+            for (int j = 0; j < totalPaths; j++) {
+                paths[j][i] = (i + j) % numberOfCities;
+            }
+        }
+    }
+
+    private void enableSecondPhase() {
         System.out.println("------> PHASE 2 start now! <------");
         onlyMutate = false;
         epochsInGPU = 3;
-        size *= 2;
-        pm = 4; //path multiplier - how many paths per thread
-        ts = size * pm; //total size of paths
-        path = new int[ts][n];
-        sum = new double[ts];
-        path2 = new int[ts][n];
-        sum2 = new double[ts];
-        path3 = new int[ts][n];
-        sum3 = new double[ts];
-        gaResult = new int[ts][n];
-        gaResultSum = new double[ts];
+        gpuThreads *= 2;
+        pathsPerThread = 4;
+        totalPaths = gpuThreads * pathsPerThread;
+        initializePaths();
     }
 
-    private static boolean isMergeColoniesNow(int ts, Integer counterMerge, Integer distintSum, Boolean mergeColonyByTime, List<Double> cutoffsByTime, Double timeToMerge, Integer stepMerge) {
-        System.out.println("Time to merge: " + timeToMerge);
-        Boolean old = (((distintSum < ts / 32 && counterMerge > 32) || distintSum < ts / 64));
+    private static boolean shouldMergeColonies(int totalPaths, int mergeCounter, int totalUnique, boolean mergeColonyByTime, List<Double> cutoffsByTime, double mergeTimeRatio, int mergeStep) {
+        System.out.println("Time to merge: " + mergeTimeRatio);
+        boolean defaultCondition = (totalUnique < totalPaths / 32 && mergeCounter > 32) || totalUnique < totalPaths / 64;
         if (mergeColonyByTime) {
-            if (cutoffsByTime.size() > stepMerge && cutoffsByTime.get(stepMerge) < timeToMerge) {
-                System.out.println("Step: " + stepMerge + ", time to merge: " + timeToMerge + " > " + cutoffsByTime.get(stepMerge));
+            if (cutoffsByTime.size() > mergeStep && cutoffsByTime.get(mergeStep) < mergeTimeRatio) {
+                System.out.println("Step: " + mergeStep + ", time to merge: " + mergeTimeRatio + " > " + cutoffsByTime.get(mergeStep));
                 return true;
             } else {
                 return false;
             }
         }
-        return old;
+        return defaultCondition;
     }
 
-    private void checkIntegrityAndRepair(int ts, int n, int[][] path, double[] sum, Random rndGen, int[] isFaultIntegrity, int colonyMultiplier, int pm) {
-        Integer faultIntegrity = Arrays.stream(isFaultIntegrity).sum();
-        if (faultIntegrity > 0) {
-            System.out.println("----> ERROR CHECKING CORRECTION, integrity fault detected in " + faultIntegrity);
-            for (int i = 0; i < isFaultIntegrity.length; i++) {
-                if (isFaultIntegrity[i] > 0) {
-                    Integer rnd;
-                    Integer part = i / (ts / colonyMultiplier);
-                    Integer bound1 = part * (ts / colonyMultiplier);
-                    Integer bound2 = (part + 1) * (ts / colonyMultiplier);
+    private void checkAndRepairIntegrity(int totalPaths, int numberOfCities, int[][] paths, double[] pathTotals, Random randomGenerator, int[] integrityFaults, int colonyMultiplier, int pathsPerThread) {
+        int faultCount = Arrays.stream(integrityFaults).sum();
+        if (faultCount > 0) {
+            System.out.println("----> ERROR CHECKING CORRECTION, integrity fault detected in " + faultCount);
+            for (int i = 0; i < integrityFaults.length; i++) {
+                if (integrityFaults[i] > 0) {
+                    int randomIndex;
+                    int colonyPart = i / (totalPaths / colonyMultiplier);
+                    int lowerBound = colonyPart * (totalPaths / colonyMultiplier);
+                    int upperBound = (colonyPart + 1) * (totalPaths / colonyMultiplier);
                     do {
-                        rnd = rndGen.nextInt(bound2 - bound1) + bound1;
-                    } while (isFaultIntegrity[rnd] > 0);
-                    for (int j = 0; j < n; j++) {
-                        path[i][j] = path[rnd][j];
-                    }
-                    sum[i] = sum[rnd];
+                        randomIndex = randomGenerator.nextInt(upperBound - lowerBound) + lowerBound;
+                    } while (integrityFaults[randomIndex] > 0);
+                    System.arraycopy(paths[randomIndex], 0, paths[i], 0, numberOfCities);
+                    pathTotals[i] = pathTotals[randomIndex];
                 }
             }
         }
     }
 
-    private double[] createBst(List<Double> list, int depthBst, int sizeBst) {
-        double[] bstTable = new double[sizeBst];
-        int base = sizeBst;
+    private double[] createBst(List<Double> list, int depth, int size) {
+        double[] bstTable = new double[size];
+        int base = size;
         int start = 0;
-        for (int level = 0; level < depthBst; level++) {
+        for (int level = 0; level < depth; level++) {
             int elementsInLevel = 1 << level;
             int middle = base / 2;
             base = base / 2;
             start += elementsInLevel / 2;
             for (int j = start; j < start + elementsInLevel; j++) {
                 bstTable[j] = list.get(middle);
-                middle += 1 << (depthBst - level);
+                middle += 1 << (depth - level);
             }
         }
         return bstTable;
     }
 
-    private int searchInBst(double value, double[] bstTable, int depthBst) {
-        int startId = 0;
-        for (int level = 0; level < depthBst; level++) {
-            double vertexInBst = bstTable[startId];
-            int leftId = (startId + 1) * 2 - 1;
-            int rightId = (startId + 1) * 2;
-            if (vertexInBst <= value + 0.0000001 &&
-                    vertexInBst >= value - 0.0000001) {
-                return 1;
-            } else if (vertexInBst > value && leftId < 1 << (depthBst)) {
-                startId = leftId;
-            } else if (vertexInBst < value && rightId < 1 << (depthBst)) {
-                startId = rightId;
-            } else {
-                return 0;
-            }
-        }
-        return 0;
-    }
-
-    private static List<Colony> postEpochProcessing(int ts, int[][] path, double[] sum, int epoch, int colonyMultiplier) {
-        List<Map<Path, int[]>> distinct = getDistinctPathWithIndex(ts, sum, path, epoch, colonyMultiplier);
-        List<Colony> ret = new ArrayList<>(distinct.size());
-        for (Map<Path, int[]> map : distinct) {
-
+    private static List<Colony> postEpochProcessing(int totalPaths, int[][] paths, double[] pathTotals, int epoch, int colonyMultiplier) {
+        List<Map<Path, int[]>> distinctPaths = getDistinctPaths(totalPaths, pathTotals, paths, epoch, colonyMultiplier);
+        List<Colony> colonies = new ArrayList<>(distinctPaths.size());
+        for (Map<Path, int[]> map : distinctPaths) {
             List<Path> sequence = map.keySet().stream().sorted(Comparator.comparing(Path::getTotal)).collect(Collectors.toList());
-            Double best = sequence.get(0).getTotal();
-            Double worst = sequence.get(sequence.size() - 1).getTotal();
-            ret.add(new Colony(map, best, worst));
+            double best = sequence.get(0).getTotal();
+            double worst = sequence.get(sequence.size() - 1).getTotal();
+            colonies.add(new Colony(map, best, worst));
         }
-        return ret;
+        return colonies;
     }
 
-    private static List<Map<Path, int[]>> getDistinctPathWithIndex(int ts, double[] sum, int[][] path, int epoch, int colonyMultiplier) {
-        List<Map<Path, int[]>> ret = new ArrayList<>();
+    private static List<Map<Path, int[]>> getDistinctPaths(int totalPaths, double[] pathTotals, int[][] paths, int epoch, int colonyMultiplier) {
+        List<Map<Path, int[]>> result = new ArrayList<>();
         Map<Double, Map<Path, int[]>> sortedMap = new HashMap<>();
         Map<Double, Path> bestPaths = new HashMap<>();
         Map<Double, Path> worstPaths = new HashMap<>();
-        Integer howMany = ts / colonyMultiplier;
-        Map<Double, String> toPrint = new HashMap<>();
+        int pathsPerColony = totalPaths / colonyMultiplier;
+        Map<Double, String> outputStrings = new HashMap<>();
         for (int col = 0; col < colonyMultiplier; col++) {
-            Integer start = col * howMany;
-            Integer end = (col + 1) * howMany;
+            int start = col * pathsPerColony;
+            int end = (col + 1) * pathsPerColony;
             Map<Path, int[]> distinct = new HashMap<>();
             double mean = 0.0;
             for (int i = start; i < end; i++) {
-                mean += sum[i] / ts * colonyMultiplier;
-                distinct.put(new Path(sum[i]), path[i]);
+                mean += pathTotals[i] / totalPaths * colonyMultiplier;
+                distinct.put(new Path(pathTotals[i]), paths[i]);
             }
-            ret.add(distinct);
+            result.add(distinct);
             List<Path> sequence = distinct.keySet().stream().sorted(Comparator.comparing(Path::getTotal)).collect(Collectors.toList());
-            Double best = sequence.get(0).getTotal();
-            Double worst = sequence.get(sequence.size() - 1).getTotal();
+            double best = sequence.get(0).getTotal();
+            double worst = sequence.get(sequence.size() - 1).getTotal();
             Path bestPath = sequence.get(0);
             Path worstPath = sequence.get(sequence.size() - 1);
-            String out = String.format("Colony = %3d", col);
-            out += String.format(", Epoch = %3d", epoch);
-            out += String.format(", Mean = %.3f", mean);
-            out += String.format(", Best = %.6f", best);
-            out += String.format(", Worst = %.6f", worst);
-            out += String.format(", Unique = %d", distinct.size());
-            toPrint.put(mean, out);
+            String output = String.format("Colony = %3d, Epoch = %3d, Mean = %.3f, Best = %.6f, Worst = %.6f, Unique = %d", col, epoch, mean, best, worst, distinct.size());
+            outputStrings.put(mean, output);
             sortedMap.put(mean, distinct);
             bestPaths.put(mean, bestPath);
             worstPaths.put(mean, worstPath);
         }
         Map<Path, int[]> previous = null;
         Path previousWorstPath = null;
-        for (Double mean : toPrint.keySet().stream().sorted().collect(Collectors.toList())) {
-            System.out.println(toPrint.get(mean));
+        for (Double mean : outputStrings.keySet().stream().sorted().collect(Collectors.toList())) {
+            System.out.println(outputStrings.get(mean));
             if (previousWorstPath != null && previous != null) {
                 Path actualBest = bestPaths.get(mean);
-//                if (previousWorstPath.getTotal() < actualBest.getTotal()) {
-//                    Map<Path, int[]> actualDistinct = sortedMap.get(mean);
-//                    actualDistinct.put(previousWorstPath, previous.get(previousWorstPath));
-//                }
             }
             previousWorstPath = worstPaths.get(mean);
             previous = sortedMap.get(mean);
         }
-        return ret;
+        return result;
     }
 
-    private static void createNextGeneration(int size, int pm, int ts, int n, int[][] path, Random rndGen, List<Colony> severalColonies, Integer scalePower) throws InterruptedException {
-        Integer numberOfColony = 0;
-        Integer totalColonies = severalColonies.size();
-        Integer howMany = size / totalColonies;
-        for (Colony colony : severalColonies) {
-            Integer start = numberOfColony * howMany;
-            Integer end = (numberOfColony + 1) * howMany;
-            numberOfColony++;
+    private static void createNextGeneration(int gpuThreads, int pathsPerThread, int totalPaths, int numberOfCities, int[][] paths, Random randomGenerator, List<Colony> colonies, int scalePower) throws InterruptedException {
+        int colonyIndex = 0;
+        int coloniesCount = colonies.size();
+        int threadsPerColony = gpuThreads / coloniesCount;
+        for (Colony colony : colonies) {
+            int start = colonyIndex * threadsPerColony;
+            int end = (colonyIndex + 1) * threadsPerColony;
+            colonyIndex++;
             List<Path> sequence = colony.getIndividuals().keySet().stream().sorted(Comparator.comparing(Path::getTotal)).collect(Collectors.toList());
-            Double best = sequence.get(0).getTotal();
-            Double worst = sequence.get(sequence.size() - 1).getTotal();
-            List<Integer> listToParallel = new ArrayList<>(size);
-            for (Integer j = start; j < end; j++) {
-                listToParallel.add(j);
+            double best = sequence.get(0).getTotal();
+            double worst = sequence.get(sequence.size() - 1).getTotal();
+            List<Integer> threadIndices = new ArrayList<>();
+            for (int j = start; j < end; j++) {
+                threadIndices.add(j);
             }
 
+            double power = Math.log(((sequence.size() / (double) totalPaths + 1.0) * (worst / best) - 1) * scalePower + 1) + 1;
 
-            Double power = Math.log(((sequence.size() / ts + 1.0) * (worst / best) - 1) * scalePower + 1) + 1;
-
-            ForkJoinPool newCustomThreadPool = new ForkJoinPool(24);
+            ForkJoinPool customThreadPool = new ForkJoinPool(24);
             try {
-                newCustomThreadPool.submit(
-                        () -> {
-                            listToParallel.parallelStream().forEach((j) -> {
-                                List<Integer> selectorList = new ArrayList<>(pm);
-                                Integer seqSize = sequence.size();
-                                for (int k = 0; k < pm; k++) {
-                                    Double toCalculate = rndGen.nextDouble();
-                                    int selector = (int) (Math.pow(toCalculate, power) * (seqSize - 2));
-                                    selectorList.add(selector);
-                                }
-                                selectorList = selectorList.stream().sorted().distinct().collect(Collectors.toList());
-                                if (seqSize <= pm + 1) {
-                                    while (selectorList.size() < pm) {
-                                        selectorList.add(0);
-                                    }
-                                }
-                                while (selectorList.size() < pm) {
-                                    Double toCalculate = rndGen.nextDouble();
-                                    int selector = (int) (Math.pow(toCalculate, power) * (seqSize - 2));
-                                    selectorList.add(selector);
-                                    selectorList = selectorList.stream().sorted().distinct().collect(Collectors.toList());
-                                }
-                                for (int k = 0; k < pm; k++) {
-                                    int[] onePath = colony.getIndividuals().get(sequence.get(selectorList.get(k)));
-                                    for (int i = 0; i < n; i++) {
-                                        path[pm * j + k][i] = onePath[i];
-                                    }
-                                }
-                            });
-                        }).get();
+                customThreadPool.submit(() -> threadIndices.parallelStream().forEach((j) -> {
+                    List<Integer> selectorList = new ArrayList<>(pathsPerThread);
+                    int seqSize = sequence.size();
+                    for (int k = 0; k < pathsPerThread; k++) {
+                        double randomValue = randomGenerator.nextDouble();
+                        int selector = (int) (Math.pow(randomValue, power) * (seqSize - 2));
+                        selectorList.add(selector);
+                    }
+                    selectorList = selectorList.stream().sorted().distinct().collect(Collectors.toList());
+                    if (seqSize <= pathsPerThread + 1) {
+                        while (selectorList.size() < pathsPerThread) {
+                            selectorList.add(0);
+                        }
+                    }
+                    while (selectorList.size() < pathsPerThread) {
+                        double randomValue = randomGenerator.nextDouble();
+                        int selector = (int) (Math.pow(randomValue, power) * (seqSize - 2));
+                        selectorList.add(selector);
+                        selectorList = selectorList.stream().sorted().distinct().collect(Collectors.toList());
+                    }
+                    for (int k = 0; k < pathsPerThread; k++) {
+                        int[] onePath = colony.getIndividuals().get(sequence.get(selectorList.get(k)));
+                        System.arraycopy(onePath, 0, paths[pathsPerThread * j + k], 0, numberOfCities);
+                    }
+                })).get();
             } catch (ExecutionException e) {
                 e.printStackTrace();
             }
         }
     }
 
-    private static void copyPathsIntoOtherTable(int ts, int n, int[][] path, double[] sum, double[] sum2, int[][] path2) {
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < ts; j++) {
-                path2[j][i] = path[j][i];
+    private static void copyPaths(int totalPaths, int numberOfCities, int[][] sourcePaths, double[] sourceTotals, int[][] targetPaths, double[] targetTotals) {
+        for (int i = 0; i < numberOfCities; i++) {
+            for (int j = 0; j < totalPaths; j++) {
+                targetPaths[j][i] = sourcePaths[j][i];
             }
         }
-        for (int j = 0; j < ts; j++) {
-            sum2[j] = sum[j];
-        }
+        System.arraycopy(sourceTotals, 0, targetTotals, 0, totalPaths);
     }
 }
