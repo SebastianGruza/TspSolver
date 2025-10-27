@@ -1,68 +1,67 @@
 # TspSolver
 
-**TspSolver** is a cutting-edge project that leverages GPU acceleration to solve the Traveling Salesman Problem (TSP) using advanced Genetic Algorithms (GA) and [Aparapi](https://aparapi.github.io/). The project is developed in Java with the Spring Framework and is designed to efficiently handle large instances of TSP by utilizing the parallel processing capabilities of modern GPUs.
+**TspSolver** is a high-performance solver for the Traveling Salesman Problem (TSP) that implements a **Massively Parallel Hybrid Memetic Algorithm**. It leverages the [Aparapi](https://aparapi.github.io/) library to offload the entire evolutionary process to the GPU, achieving significant acceleration.
 
-## Features
+This project is not a simple Genetic Algorithm (GA). It is an advanced **Memetic Algorithm (MA)** that combines global search (genetic operators like crossover) with intensive local search (heuristics like 2-Opt and 3-Opt). This hybrid approach is implemented using a sophisticated **Two-Level Island Model** for managing population diversity and preventing premature convergence.
 
-- **Dynamic .tsp File Processing**: Automatically reads `.tsp` problem files from the current directory.
-- **Result Logging**: Saves optimization results to `results.txt` for analysis and record-keeping.
-- **Real-Time Visualization**: Visualizes real-time computations and the shortest path found so far at [http://127.0.0.1:8080](http://127.0.0.1:8080).
-- **Innovative GA Enhancements**:
-  - **Population Division into Colonies**: Divides the population into multiple colonies for independent evolution, enhancing diversity.
-  - **Adaptive Colony Merging**: Colonies can merge under certain rules to share genetic material and avoid premature convergence.
-  - **Tabu Search Integration**: Implements a tabu list to penalize certain paths that show prolonged lack of improvement, helping the algorithm escape local minima.
+The application is built in Java and uses the Spring Framework to manage data and provide real-time visualization.
 
-## Implementation Details
+## Core Features
 
-### GPU Acceleration with Aparapi
+* **Hybrid Memetic Algorithm**: Fuses Genetic Algorithm operators (crossover, mutation) with powerful local search heuristics (2-Opt, 3-Opt, Segment Relocation) for rapid optimization.
+* **Massive GPGPU Acceleration**: The entire evolutionary loop—including selection, crossover, and all memetic operators—runs in parallel on thousands of GPU threads via a custom Aparapi kernel (`TspGAKernel`).
+* **Two-Level Island/Colony Model**: A sophisticated population structure that combines thousands of fast-evolving GPU "islands" with dozens of strategic CPU-managed "colonies" to ensure a robust global search.
+* **Tabu Search Integration**: Employs a high-speed, BST-based Tabu list on the GPU to penalize recently visited solutions, helping the algorithm escape local optima.
+* **Dynamic Problem Solving**: Automatically reads and solves `.tsp` files from a directory, logging all results.
+* **Real-Time Visualization**: A built-in web server at `http://127.0.0.1:8080` visualizes the optimization process and the best path found in real-time.
 
-- **Parallel Genetic Algorithm Execution**: The core computation is offloaded to the GPU using Aparapi, allowing massive parallelism in evaluating and evolving the population.
-- **Custom Kernel Implementation**: A custom kernel (`TspGAKernel`) is written to perform GA operations directly on the GPU, significantly speeding up the computation.
+## Algorithm Architecture: A Two-Level Hybrid Model
 
-### Advanced Genetic Operators
+The solver's architecture is its most innovative feature. It divides the optimization problem into two distinct levels: a strategic CPU "Orchestrator" and a tactical GPU "Worker."
 
-- **Multiple Mutation Strategies**: Implements a rich set of mutation operators to explore the solution space effectively:
-  - **Segment Relocation (`mutSegmentRelocation`)**: Moves a segment of the route to a different position.
-  - **Three Vertices Relocation (`mutThreeVerticesRelocation`)**: Relocates three cities simultaneously.
-  - **Two Vertices Relocation (`mutTwoVerticesRelocation`)**: Relocates two cities to new positions.
-  - **Single Vertex Relocation (`mutSingleVertexRelocation`)**: Moves a single city within the route.
-  - **Vertex Swap (`mutVertexSwap`)**: Swaps the positions of two cities.
-  - **2-Opt Heuristic (`mutTwoOpt`)**: Reverses a segment of the route to eliminate crossings.
-  - **3-Opt Heuristic (`mutThreeOpt`)**: Removes three edges and reconnects the segments in a different way to reduce the total distance.
+### Level 1 (CPU): The "Colony" Orchestrator
+The main Java (Spring) application acts as the high-level strategist. Its responsibilities are:
 
-- **Adaptive Mutation Rates**: The number of mutation trials and the selection of mutation operators are dynamically adjusted based on the problem size and the current state of the population.
+* **Colony Management**: Divides the total population into a small number (`colonyMultiplier`) of large "Colonies."
+* **Migration (Merging)**: Manages gene flow between these colonies. Most of the time, colonies evolve separately. Periodically (`shouldMergeColonies`), the CPU merges them into one "super-colony" to mix the best genetic material before splitting them apart again.
+* **Tabu List Generation**: Analyzes results from all colonies and constructs a balanced Binary Search Tree (`bstTable`) of "tabu" (forbidden) solutions.
+* **I/O and Control**: Handles file loading, result saving, and the visualization web server.
+* **Adaptive Strategy**: Detects stagnation (`totalUnique < gpuThreads / 4`) and triggers a "Phase 2," dynamically changing the algorithm's parameters (e.g., enabling crossover, increasing population) to intensify the search.
 
-### Enhanced Crossover Mechanisms
+### Level 2 (GPU): The "Island" Kernel
+The custom `TspGAKernel` performs the computationally massive "tactical" work.
 
-- **Order Crossover (OX) Implementation**: Custom crossover operators are designed to preserve relative city positions and promote diversity in offspring.
-- **Adaptive Crossover Selection**: The algorithm varies crossover pairs and points dynamically to explore new regions of the solution space.
+* **Island-per-Thread**: Each of the thousands of GPU threads (`gid`) acts as an independent, isolated "island."
+* **Memetic Evolution**: Each "island" takes a tiny population (`pathsPerThread`) and runs a full, high-speed memetic algorithm on it in isolation for `epochsInGPU` generations.
+* **Self-Contained Engine**: The kernel is entirely self-sufficient, containing its own GPU-safe random number generator (PRNG) and all memetic operators.
+* **Local Optimization**: This is where the memetic "learning" happens. Each island intensely optimizes its local solutions using 2-Opt, 3-Opt, and other heuristics before reporting its best result back to the CPU orchestrator.
 
-### Tabu Search Integration
+This two-level model allows the algorithm to simultaneously explore thousands of different solution paths in parallel (on GPU islands) while maintaining high-level strategic diversity (via CPU colonies).
 
-- **Tabu List with BST Implementation**: A Binary Search Tree (BST) is used to implement the tabu list efficiently on the GPU, penalizing paths that have been recently explored.
-- **Penalization Mechanism**: Paths found in the tabu list receive a slight penalty, encouraging the algorithm to explore alternative solutions.
+## The Memetic Engine: Operators
 
-### Custom Random Number Generator
+The algorithm's power comes from its hybrid set of operators, which are all implemented to run directly on the GPU.
 
-- **GPU-Optimized PRNG**: A custom pseudo-random number generator based on XORShift is implemented within the kernel to ensure efficient and independent random sequences across GPU threads.
-- **Thread-Safe Randomness**: Each thread maintains its own state, preventing correlation between random numbers generated in different threads.
+### Genetic Operators (Global Exploration)
 
-### Efficient Memory Management
+* **Order Crossover (OX) (`crossOX`)**: The primary genetic operator. It creates new child routes by combining segments from two parent routes while preserving the relative order of cities, which is essential for TSP.
 
-- **Preallocated Data Structures**: All necessary arrays and matrices are preallocated to minimize memory allocation overhead during kernel execution.
-- **Thread-Local Storage**: Data structures are designed to avoid shared state between threads, enhancing parallel execution efficiency.
-- **Avoidance of Dynamic Memory Allocation**: The kernel avoids dynamic memory allocation to comply with GPU execution constraints and to optimize performance.
+### Local Search Heuristics (Local Exploitation)
 
-### Population Management Strategies
+This is the "memetic" part. After a genetic operation, individuals are *immediately* improved using these powerful heuristics:
 
-- **Colony-Based Evolution**: The population is divided into multiple colonies that evolve independently, promoting diversity and reducing the risk of premature convergence.
-- **Adaptive Colony Merging**: Colonies can merge based on predefined criteria (e.g., elapsed time or stagnation), allowing the sharing of genetic material and injecting diversity.
-- **Historical Best Paths**: Maintains a history of the best paths found to guide the evolution and prevent the loss of high-quality solutions.
+* **2-Opt (`mutTwoOpt`)**: The classic TSP heuristic. It finds two crossing edges in a route and reverses the segment between them to "uncross" them and shorten the path.
+* **3-Opt (`mutThreeOpt`)**: A more powerful (and complex) version of 2-Opt. It removes three edges and tests all possible non-crossing reconnections to find the best improvement.
+* **Relocation Operators**: A family of "move" operators that shift cities to new positions:
+    * `mutSegmentRelocation`: Moves an entire segment (sub-path) to a new location.
+    * `mutSingle/Two/ThreeVerticesRelocation`: Relocates 1, 2, or 3 adjacent cities to a new part of the route.
+* **Swap Mutation (`mutVertexSwap`)**: A simple mutation that swaps the positions of two random cities.
 
-### Integrity Checks and Validation
+## Performance & Robustness Features
 
-- **Integrity Verification**: Implements checks to ensure that each route is valid, containing all cities exactly once.
-- **Error Correction Mechanisms**: Automatically repairs invalid routes detected during integrity checks.
+* **GPU-Optimized Tabu Search**: The Tabu list is not a simple array. It's a balanced Binary Search Tree (`createBst`) passed to the GPU, allowing thousands of threads to query it (`searchInBst`) in parallel with high efficiency.
+* **Custom GPU PRNG**: A custom, thread-safe pseudo-random number generator (based on XORShift) is implemented in the kernel (`random01()`). This is critical for high-performance GPGPU as it avoids the massive bottleneck of using `Math.random()`.
+* **Integrity & Validation**: The kernel has a built-in `checkIntegrity` method to validate that routes are not corrupted during crossover/mutation. The CPU orchestrator (`checkAndRepairIntegrity`) then repairs any invalid routes reported by the GPU, ensuring 100% solution validity.
 
 ## Configuration
 
