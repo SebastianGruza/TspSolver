@@ -195,9 +195,19 @@ def ox_crossover(R, rp1, rp2, CH, rc, existed, pi, n, states, sti):
             fillpos = (fillpos + 1) % n
 
 
+@cuda.jit(device=True, inline=True)
+def eff(v, a, use_tabu, tabu_age):
+    """Efektywna długość do SELEKCJI: osobnik starszy niż próg dostaje karę ~0.4%
+    (analog kary tabu ×1.004 z oryginału) => łatwiej go wyprzeć = dywersyfikacja."""
+    if use_tabu == 1 and a >= tabu_age:
+        return v + v // 250
+    return v
+
+
 @cuda.jit
 def evolve_ga(D, neigh, Knl, R, CH, migrant, P, scratch, existed, states, rlen, ml,
-              n, T, pm, C, grid_epochs, sweeps, migrate_every, use_merge, merge_len):
+              age, gbest, gbest_route, n, T, pm, C, grid_epochs, sweeps, migrate_every,
+              use_merge, merge_len, use_tabu, tabu_age):
     g = cuda.cg.this_grid()
     gid = cuda.grid(1)
     if gid < T:
@@ -205,34 +215,54 @@ def evolve_ga(D, neigh, Knl, R, CH, migrant, P, scratch, existed, states, rlen, 
         for e in range(pm):                       # jednorazowy LS startu (init nie jest lok-opt)
             local_search(D, neigh, Knl, R, P, base + e, gid, n, sweeps)
             rlen[base + e] = route_len(D, R, base + e, n)
+            age[base + e] = 0
+        bi = 0; bl = rlen[base]                   # best-ever wyspy (odporny na tabu)
+        for e in range(1, pm):
+            if rlen[base + e] < bl:
+                bl = rlen[base + e]; bi = e
+        gbest[gid] = bl
+        for i in range(n):
+            gbest_route[gid, i] = R[base + bi, i]
     g.sync()
     colsize = T // C
     for ge in range(grid_epochs):
         if gid < T:
             base = gid * pm
-            # (rodzice są już w lok. optimum — NIE re-LS-ujemy; LS tylko nowe kandydaty)
-            # 2. OX + LS dziecka + steady-state (dziecko wypiera najsłabszego)
+            for e in range(pm):                   # postarzanie osobników
+                age[base + e] += 1
+            # OX + LS dziecka + steady-state (dziecko wypiera efektywnie najsłabszego)
             for e in range(pm):
                 e2 = e + 1 if e + 1 < pm else 0
                 ox_crossover(R, base + e, base + e2, CH, base + e, existed, gid, n, states, gid)
                 local_search(D, neigh, Knl, CH, P, base + e, gid, n, sweeps)
                 clen = route_len(D, CH, base + e, n)
-                worst = 0; wl = rlen[base]
+                worst = 0; wl = eff(rlen[base], age[base], use_tabu, tabu_age)
                 for w in range(1, pm):
-                    if rlen[base + w] > wl:
-                        wl = rlen[base + w]; worst = w
+                    le = eff(rlen[base + w], age[base + w], use_tabu, tabu_age)
+                    if le > wl:
+                        wl = le; worst = w
                 if clen < wl:
                     for i in range(n):
                         R[base + worst, i] = CH[base + e, i]
-                    rlen[base + worst] = clen
-            # 3. perturbacja najsłabszego (dywersyfikacja)
-            worst = 0; wl = rlen[base]
+                    rlen[base + worst] = clen; age[base + worst] = 0
+                    if clen < gbest[gid]:
+                        gbest[gid] = clen
+                        for i in range(n):
+                            gbest_route[gid, i] = CH[base + e, i]
+            # perturbacja efektywnie najsłabszego + LS
+            worst = 0; wl = eff(rlen[base], age[base], use_tabu, tabu_age)
             for w in range(1, pm):
-                if rlen[base + w] > wl:
-                    wl = rlen[base + w]; worst = w
+                le = eff(rlen[base + w], age[base + w], use_tabu, tabu_age)
+                if le > wl:
+                    wl = le; worst = w
             double_bridge(R, scratch, base + worst, gid, n, states, gid)
             local_search(D, neigh, Knl, R, P, base + worst, gid, n, sweeps)
             rlen[base + worst] = route_len(D, R, base + worst, n)
+            age[base + worst] = 0
+            if rlen[base + worst] < gbest[gid]:
+                gbest[gid] = rlen[base + worst]
+                for i in range(n):
+                    gbest_route[gid, i] = R[base + worst, i]
         g.sync()
         # --- migracja: faza 1 zbierz migranta (czyta cudze, stabilne) ---
         do_mig = (ge + 1) % migrate_every == 0
@@ -261,14 +291,19 @@ def evolve_ga(D, neigh, Knl, R, CH, migrant, P, scratch, existed, states, rlen, 
         # --- faza 2: zastosuj (pisze tylko swoje) ---
         if gid < T and do_mig:
             base = gid * pm
-            worst = 0; wl = rlen[base]
+            worst = 0; wl = eff(rlen[base], age[base], use_tabu, tabu_age)
             for w in range(1, pm):
-                if rlen[base + w] > wl:
-                    wl = rlen[base + w]; worst = w
+                le = eff(rlen[base + w], age[base + w], use_tabu, tabu_age)
+                if le > wl:
+                    wl = le; worst = w
             if ml[gid] < wl:
                 for i in range(n):
                     R[base + worst, i] = migrant[gid, i]
-                rlen[base + worst] = ml[gid]
+                rlen[base + worst] = ml[gid]; age[base + worst] = 0
+                if ml[gid] < gbest[gid]:
+                    gbest[gid] = ml[gid]
+                    for i in range(n):
+                        gbest_route[gid, i] = migrant[gid, i]
         g.sync()
 
 
@@ -285,7 +320,8 @@ def knn(D, Knl):
 
 
 def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
-             migrate_every=10, tpb=128, seed=1, use_merge=0, merge_len=20):
+             migrate_every=10, tpb=128, seed=1, use_merge=0, merge_len=20,
+             use_tabu=0, tabu_age=30):
     # T wysokie = wypełnia GPU (przy n<~1000 to niemal darmowe, mocno poprawia jakość);
     # dla dużych n LS jest droższy per wyspa, więc GPU nasyca się wcześniej.
     from tsp_io import nn_tour
@@ -310,17 +346,21 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
     d_ex = cuda.device_array((T, n), np.int32)
     d_st = cuda.to_device(states)
     d_rl = cuda.device_array(M, np.int32); d_ml = cuda.device_array(T, np.int32)
+    d_age = cuda.device_array(M, np.int32)
+    d_gbest = cuda.device_array(T, np.int32)
+    d_gbr = cuda.device_array((T, n), np.int32)   # best-ever route per wyspa (odporny na tabu)
     blocks = (T + tpb - 1) // tpb
     import time
     t0 = time.time()
     evolve_ga[blocks, tpb](d_D, d_neigh, Knl, d_R, d_CH, d_mig, d_P, d_scr, d_ex,
-                           d_st, d_rl, d_ml, n, T, pm, C, grid_epochs, sweeps,
-                           migrate_every, use_merge, merge_len)
+                           d_st, d_rl, d_ml, d_age, d_gbest, d_gbr, n, T, pm, C,
+                           grid_epochs, sweeps, migrate_every, use_merge, merge_len,
+                           use_tabu, tabu_age)
     cuda.synchronize()
     dt = time.time() - t0
-    rl = d_rl.copy_to_host()
+    rl = d_gbest.copy_to_host()               # wynik z best-ever (odporny na tabu)
     bi = int(rl.argmin())
-    bestt = d_R.copy_to_host()[bi]
+    bestt = d_gbr.copy_to_host()[bi]
     perm_ok = sorted(bestt.tolist()) == list(range(n))
     return int(rl.min()), perm_ok, dt
 
@@ -338,14 +378,16 @@ if __name__ == "__main__":
     pm = int(sys.argv[4]) if len(sys.argv) > 4 else 4
     C = int(sys.argv[5]) if len(sys.argv) > 5 else 4
     merge = int(sys.argv[6]) if len(sys.argv) > 6 else 0
+    tabu = int(sys.argv[7]) if len(sys.argv) > 7 else 0
     name = os.path.basename(path).split(".")[0]
     if path.endswith(".txd"):
         coords, _ = load_txd(path); ewt = "EUC_2D"
     else:
         coords, _, ewt = load_tsplib(path)
     D = dist_matrix(coords, ewt)
-    best, perm_ok, dt = solve_ga(D, T=T, pm=pm, C=C, grid_epochs=ge, use_merge=merge)
+    best, perm_ok, dt = solve_ga(D, T=T, pm=pm, C=C, grid_epochs=ge,
+                                 use_merge=merge, use_tabu=tabu)
     opt = OPT.get(name)
     gap = f"{(best/opt-1)*100:.3f}%" if opt else "?"
-    print(f"{name}: n={D.shape[0]} T={T} pm={pm} C={C} ge={ge} merge={merge} best={best} "
-          f"opt={opt} gap={gap} perm_ok={perm_ok} [{dt:.1f}s]")
+    print(f"{name}: n={D.shape[0]} T={T} pm={pm} C={C} ge={ge} merge={merge} tabu={tabu} "
+          f"best={best} opt={opt} gap={gap} perm_ok={perm_ok} [{dt:.1f}s]")
