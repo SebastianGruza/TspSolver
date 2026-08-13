@@ -228,8 +228,10 @@ def knn(D, Knl):
     return neigh
 
 
-def solve_ga(D, T=256, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
+def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
              migrate_every=10, tpb=128, seed=1):
+    # T wysokie = wypełnia GPU (przy n<~1000 to niemal darmowe, mocno poprawia jakość);
+    # dla dużych n LS jest droższy per wyspa, więc GPU nasyca się wcześniej.
     from tsp_io import nn_tour
     n = D.shape[0]
     M = T * pm
@@ -274,7 +276,7 @@ if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(__file__))
     from tsp_io import load_tsplib, load_txd, dist_matrix
     path = sys.argv[1] if len(sys.argv) > 1 else "instances/gr431.tsp"
-    T = int(sys.argv[2]) if len(sys.argv) > 2 else 256
+    T = int(sys.argv[2]) if len(sys.argv) > 2 else 2048
     ge = int(sys.argv[3]) if len(sys.argv) > 3 else 200
     pm = int(sys.argv[4]) if len(sys.argv) > 4 else 4
     C = int(sys.argv[5]) if len(sys.argv) > 5 else 4
