@@ -76,6 +76,19 @@ cd ~/TspSolver
 Na testowanym zakresie port **bije oryginał jakościowo i czasowo**. `perm_ok=True`
 na każdym biegu (operatory permutacyjnie poprawne — brak naprawy integralności).
 
+## A/B (walidacja merge i tabu)
+
+Obie opcjonalne dźwignie dywersyfikacji sprawdzone kontrolowanym A/B przy **tym samym
+budżecie** (RTX 3090) — obie dają mały, spójny zysk na dużych instancjach, domyślnie OFF:
+
+| mechanizm | instancja | off | on |
+|:--|:--|:--|:--|
+| **merge kolonii** (globalne mieszanie w 4 punktach budżetu 0.25/0.5/0.75/0.9) | pr1002 (n=1002) | 0.191 % | **0.173 %** |
+| **tabu** (osobnik za długo w czołówce → +0.4 % kary do długości *efektywnej* w selekcji; `gbest` odporny na karę) | pcb3038 (n=3038, 300 epok) | 1.458 % | **1.319 %** |
+
+Przy tym samym budżecie pcb3038 schodzi do **1.32 %** vs 2.5–3.1 % oryginału.
+Włączasz przełącznikami `merge` / `tabu` (patrz *Uruchomienie*).
+
 ## Status / dalej
 
 Zrobione: pełny pakiet operatorów + kolonie/merge + tabu, zwalidowane do optimum

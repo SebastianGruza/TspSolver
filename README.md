@@ -62,7 +62,19 @@ lower gaps in ~40 % of the original wall-clock time on large ones.**
 
 On the tested instances the port already **beats the original in both solution quality and
 wall-clock time** — exact optimum on gr431 in ~40% of the time, and ~6× lower gap on pr1002,
-also in ~40% of the time. Scaling to `n > 3000` and a colony-merge A/B are in progress.
+also in ~40% of the time.
+
+**A/B validation (controlled, same budget, RTX 3090).** The two optional diversity
+mechanisms were each checked with an A/B run; both give a small, consistent gain on large
+instances and are off by default (switchable):
+
+| mechanism | instance | off | on |
+|:--|:--|:--|:--|
+| **colony merge** — global mixing at 4 budget checkpoints (0.25/0.5/0.75/0.9) | pr1002 (n=1002) | 0.191 % | **0.173 %** |
+| **tabu** — a leader that stays too long in front gets a +0.4 % effective-length penalty in selection (its true best is kept in a tabu-immune tracker) | pcb3038 (n=3038, 300 epochs) | 1.458 % | **1.319 %** |
+
+At the same budget pcb3038 already reaches **1.32 %** vs the original's 2.5–3.1 %. Scaling the
+full `n > 3000` set is in progress.
 
 > The Python + CUDA port was developed together with **Claude (Fable 5)** running in **Claude Code**.
 
