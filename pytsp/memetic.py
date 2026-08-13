@@ -73,6 +73,43 @@ def two_opt_full(D, R, gid, n, max_sweeps):
 
 
 @cuda.jit(device=True, inline=True)
+def two_opt_neighbor(D, neigh, Knl, R, P, gid, n, max_sweeps):
+    """2-opt na listach sąsiadów — O(n·K)/sweep. P=tablica pozycji (P[city]=idx).
+    Pruning: sąsiedzi posortowani rosnąco, przerwij gdy D[a,c]>=D[a,b]."""
+    for i in range(n):
+        P[gid, R[gid, i]] = i
+    for _sweep in range(max_sweeps):
+        improved = False
+        for i in range(n - 1):
+            a = R[gid, i]
+            b = R[gid, i + 1]
+            dab = D[a, b]
+            for kk in range(Knl):
+                c = neigh[a, kk]
+                dac = D[a, c]
+                if dac >= dab:
+                    break                 # dalsi sąsiedzi nie poprawią
+                j = P[gid, c]
+                if j <= i:
+                    continue              # wymagamy segmentu [i+1..j] do przodu
+                jn = j + 1 if j + 1 < n else 0
+                d = R[gid, jn]
+                gain = dab + D[c, d] - dac - D[b, d]
+                if gain > 0:
+                    lo = i + 1; hi = j
+                    while lo < hi:
+                        cl = R[gid, lo]; ch = R[gid, hi]
+                        R[gid, lo] = ch; R[gid, hi] = cl
+                        P[gid, ch] = lo; P[gid, cl] = hi
+                        lo += 1; hi -= 1
+                    improved = True
+                    b = R[gid, i + 1]     # następnik się zmienił
+                    dab = D[a, b]
+        if not improved:
+            break
+
+
+@cuda.jit(device=True, inline=True)
 def double_bridge(R, S, gid, n, states):
     """Perturbacja 4-opt double-bridge: [0,a)+[b,c)+[a,b)+[c,n). S = scratch."""
     a = 1 + int(rnd01(states, gid) * (n - 3))
@@ -91,8 +128,8 @@ def double_bridge(R, S, gid, n, states):
 
 
 @cuda.jit
-def evolve_coop(D, cur, best, scratch, states, bestlen, n,
-                grid_epochs, ls_iters, K, migrate_every):
+def evolve_coop(D, neigh, Knl, cur, best, scratch, P, states, bestlen, n,
+                grid_epochs, ls_iters, migrate_every):
     g = cuda.cg.this_grid()
     gid = cuda.grid(1)
     T = cur.shape[0]
@@ -101,7 +138,7 @@ def evolve_coop(D, cur, best, scratch, states, bestlen, n,
     g.sync()
     for ge in range(grid_epochs):
         if gid < T:
-            two_opt_full(D, cur, gid, n, ls_iters)   # ls_iters = max_sweeps
+            two_opt_neighbor(D, neigh, Knl, cur, P, gid, n, ls_iters)
             clen = route_len(D, cur, gid, n)
             if clen < bestlen[gid]:
                 for i in range(n):
@@ -121,23 +158,38 @@ def evolve_coop(D, cur, best, scratch, states, bestlen, n,
         g.sync()                              # bariera epoki
 
 
-def solve(D, T=512, grid_epochs=300, ls_iters=50, K=16, migrate_every=20,
+def knn(D, Knl):
+    """K najbliższych sąsiadów per miasto (posortowani rosnąco), int32 [n,Knl]."""
+    n = D.shape[0]
+    neigh = np.empty((n, Knl), np.int32)
+    for c in range(n):
+        row = D[c]
+        idx = np.argpartition(row, Knl + 1)[:Knl + 1]
+        idx = idx[idx != c]
+        idx = idx[np.argsort(row[idx])][:Knl]
+        neigh[c] = idx
+    return neigh
+
+
+def solve(D, T=512, grid_epochs=300, ls_iters=50, Knl=10, migrate_every=20,
           tpb=128, seed=1):
     from tsp_io import nn_tour
     n = D.shape[0]
     nn = nn_tour(D, 0).astype(np.int32)
     cur = np.tile(nn, (T, 1)); best = cur.copy()
+    neigh = knn(D, Knl)
     rng = np.random.default_rng(seed)
     states = rng.integers(-2**31, 2**31 - 1, size=(T, 5), dtype=np.int32)
     states[states == 0] = 1
-    d_D = cuda.to_device(D); d_cur = cuda.to_device(cur); d_best = cuda.to_device(best)
-    d_scr = cuda.device_array_like(cur); d_st = cuda.to_device(states)
-    d_bl = cuda.device_array(T, np.int32)
+    d_D = cuda.to_device(D); d_neigh = cuda.to_device(neigh)
+    d_cur = cuda.to_device(cur); d_best = cuda.to_device(best)
+    d_scr = cuda.device_array_like(cur); d_P = cuda.device_array((T, n), np.int32)
+    d_st = cuda.to_device(states); d_bl = cuda.device_array(T, np.int32)
     blocks = (T + tpb - 1) // tpb
     import time
     t0 = time.time()
-    evolve_coop[blocks, tpb](d_D, d_cur, d_best, d_scr, d_st, d_bl, n,
-                             grid_epochs, ls_iters, K, migrate_every)
+    evolve_coop[blocks, tpb](d_D, d_neigh, Knl, d_cur, d_best, d_scr, d_P, d_st,
+                             d_bl, n, grid_epochs, ls_iters, migrate_every)
     cuda.synchronize()
     dt = time.time() - t0
     bl = d_bl.copy_to_host()
