@@ -269,7 +269,7 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
 
 
 OPT = {"berlin52": 7542, "kroA100": 21282, "pcb3038": 137694,
-       "gr431": 171414, "pcb442": 50778}
+       "gr431": 171414, "pcb442": 50778, "pr1002": 259045}
 
 if __name__ == "__main__":
     import sys
