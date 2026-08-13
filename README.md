@@ -68,6 +68,10 @@ also in ~40% of the time. Scaling to `n > 3000` and a colony-merge A/B are in pr
 
 ---
 
+# 🧬 The original Java + Aparapi solver
+
+*Everything below documents the original Java + Aparapi implementation that the CUDA port above is based on.*
+
 ## Core Features
 
 * **Hybrid Memetic Algorithm**: Fuses Genetic Algorithm operators (crossover, mutation) with powerful local search heuristics (2-Opt, 3-Opt, Segment Relocation) for rapid optimization.
