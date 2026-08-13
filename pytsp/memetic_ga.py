@@ -92,13 +92,59 @@ def or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, max_sweeps):
 
 
 @cuda.jit(device=True, inline=True)
+def three_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, max_sweeps):
+    """3-opt neighbor-guided (typ z oryginału: reverse [i+1..j] + [j+1..k],
+    nowe krawędzie a-c, b-e, d-f). c∈sąsiedzi(a), e∈sąsiedzi(b), pruning a-c."""
+    for _sweep in range(max_sweeps):
+        improved = False
+        for i in range(n - 2):
+            a = R[ri, i]; b = R[ri, i + 1]; dab = D[a, b]
+            moved = False
+            for k1 in range(Knl):
+                c = neigh[a, k1]; dac = D[a, c]
+                if dac >= dab:
+                    break
+                j = P[pi, c]
+                if j <= i or j >= n - 1:
+                    continue
+                d = R[ri, j + 1]
+                base = dab + D[c, d] - dac        # (dab+dcd+def) - (dac+dbe+ddf), część stała
+                for k2 in range(Knl):
+                    e = neigh[b, k2]; k = P[pi, e]
+                    if k <= j or k >= n - 1:
+                        continue
+                    f = R[ri, k + 1]
+                    if base + D[e, f] - D[b, e] - D[d, f] > 0:
+                        lo = i + 1; hi = j
+                        while lo < hi:
+                            cl = R[ri, lo]; ch = R[ri, hi]
+                            R[ri, lo] = ch; R[ri, hi] = cl
+                            P[pi, ch] = lo; P[pi, cl] = hi
+                            lo += 1; hi -= 1
+                        lo = j + 1; hi = k
+                        while lo < hi:
+                            cl = R[ri, lo]; ch = R[ri, hi]
+                            R[ri, lo] = ch; R[ri, hi] = cl
+                            P[pi, ch] = lo; P[pi, cl] = hi
+                            lo += 1; hi -= 1
+                        improved = True; moved = True
+                        break
+                if moved:
+                    break
+        if not improved:
+            break
+
+
+@cuda.jit(device=True, inline=True)
 def local_search(D, neigh, Knl, R, P, ri, pi, n, sweeps):
     for i in range(n):
         P[pi, R[ri, i]] = i
-    for _r in range(3):
+    for _r in range(2):
         two_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
         or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+    three_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
     two_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+    or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
 
 
 @cuda.jit(device=True, inline=True)
