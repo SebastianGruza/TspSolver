@@ -323,7 +323,7 @@ def knn(D, Knl):
 
 def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
              migrate_every=10, tpb=128, seed=1, use_merge=0, merge_len=20,
-             use_tabu=0, tabu_age=30, chunk=0, verbose=False, tag=""):
+             use_tabu=0, tabu_age=30, chunk=0, verbose=False, tag="", init_mode="kicks"):
     # T wysokie = wypełnia GPU (przy n<~1000 to niemal darmowe, mocno poprawia jakość);
     # dla dużych n LS jest droższy per wyspa, więc GPU nasyca się wcześniej.
     from tsp_io import nn_tour
@@ -332,12 +332,21 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
     nn = nn_tour(D, 0).astype(np.int32)
     neigh = knn(D, Knl)
     rng = np.random.default_rng(seed)
-    # dywersyfikacja: 1 osobnik/wyspa = NN (szybka zbieżność), reszta losowe permutacje
     R = np.empty((M, n), np.int32)
-    for gid in range(T):
-        R[gid * pm] = nn
-        for e in range(1, pm):
-            R[gid * pm + e] = rng.permutation(n).astype(np.int32)
+    if init_mode == "random":                       # STARY: 1 NN + reszta losowe permutacje
+        for gid in range(T):
+            R[gid * pm] = nn
+            for e in range(1, pm):
+                R[gid * pm + e] = rng.permutation(n).astype(np.int32)
+    else:                                           # NOWY: wszystkie = NN + 0..5 double-bridge
+        for m in range(M):                          # różnorodne DOBRE trasy (kluczowe dla dużych n)
+            t = nn.copy()
+            for _ in range(int(rng.integers(0, 6))):
+                p = np.sort(rng.integers(1, n - 1, 3))
+                a, b, c = int(p[0]), int(p[1]), int(p[2])
+                if a < b < c:
+                    t = np.concatenate([t[:a], t[b:c], t[a:b], t[c:]])
+            R[m] = t
     states = rng.integers(-2**31, 2**31 - 1, size=(T, 5), dtype=np.int32)
     states[states == 0] = 1
     d_D = cuda.to_device(D); d_neigh = cuda.to_device(neigh)
