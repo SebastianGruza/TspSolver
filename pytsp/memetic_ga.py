@@ -197,7 +197,7 @@ def ox_crossover(R, rp1, rp2, CH, rc, existed, pi, n, states, sti):
 
 @cuda.jit
 def evolve_ga(D, neigh, Knl, R, CH, migrant, P, scratch, existed, states, rlen, ml,
-              n, T, pm, C, grid_epochs, sweeps, migrate_every):
+              n, T, pm, C, grid_epochs, sweeps, migrate_every, use_merge, merge_len):
     g = cuda.cg.this_grid()
     gid = cuda.grid(1)
     if gid < T:
@@ -234,11 +234,21 @@ def evolve_ga(D, neigh, Knl, R, CH, migrant, P, scratch, existed, states, rlen, 
             local_search(D, neigh, Knl, R, P, base + worst, gid, n, sweeps)
             rlen[base + worst] = route_len(D, R, base + worst, n)
         g.sync()
-        # --- migracja w kolonii: faza 1 zbierz migranta (czyta cudze, stabilne) ---
+        # --- migracja: faza 1 zbierz migranta (czyta cudze, stabilne) ---
         do_mig = (ge + 1) % migrate_every == 0
+        merge_now = False
+        if use_merge == 1:                            # 4 okna merge wokół progów budżetu
+            c0 = grid_epochs // 4; c1 = grid_epochs // 2
+            c2 = (3 * grid_epochs) // 4; c3 = (9 * grid_epochs) // 10
+            if (c0 <= ge < c0 + merge_len) or (c1 <= ge < c1 + merge_len) or \
+               (c2 <= ge < c2 + merge_len) or (c3 <= ge < c3 + merge_len):
+                merge_now = True
         if gid < T and do_mig:
-            cstart = (gid // colsize) * colsize
-            other = cstart + int(rnd01(states, gid) * colsize)
+            if merge_now:                             # MERGE: migracja globalna (miesza kolonie)
+                lo = 0; span = T
+            else:                                     # intra-colony (re-dywergencja)
+                lo = (gid // colsize) * colsize; span = colsize
+            other = lo + int(rnd01(states, gid) * span)
             obase = other * pm
             ob = 0; obl = rlen[obase]
             for e in range(1, pm):
@@ -275,7 +285,7 @@ def knn(D, Knl):
 
 
 def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
-             migrate_every=10, tpb=128, seed=1):
+             migrate_every=10, tpb=128, seed=1, use_merge=0, merge_len=20):
     # T wysokie = wypełnia GPU (przy n<~1000 to niemal darmowe, mocno poprawia jakość);
     # dla dużych n LS jest droższy per wyspa, więc GPU nasyca się wcześniej.
     from tsp_io import nn_tour
@@ -304,7 +314,8 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
     import time
     t0 = time.time()
     evolve_ga[blocks, tpb](d_D, d_neigh, Knl, d_R, d_CH, d_mig, d_P, d_scr, d_ex,
-                           d_st, d_rl, d_ml, n, T, pm, C, grid_epochs, sweeps, migrate_every)
+                           d_st, d_rl, d_ml, n, T, pm, C, grid_epochs, sweeps,
+                           migrate_every, use_merge, merge_len)
     cuda.synchronize()
     dt = time.time() - t0
     rl = d_rl.copy_to_host()
@@ -326,14 +337,15 @@ if __name__ == "__main__":
     ge = int(sys.argv[3]) if len(sys.argv) > 3 else 200
     pm = int(sys.argv[4]) if len(sys.argv) > 4 else 4
     C = int(sys.argv[5]) if len(sys.argv) > 5 else 4
+    merge = int(sys.argv[6]) if len(sys.argv) > 6 else 0
     name = os.path.basename(path).split(".")[0]
     if path.endswith(".txd"):
         coords, _ = load_txd(path); ewt = "EUC_2D"
     else:
         coords, _, ewt = load_tsplib(path)
     D = dist_matrix(coords, ewt)
-    best, perm_ok, dt = solve_ga(D, T=T, pm=pm, C=C, grid_epochs=ge)
+    best, perm_ok, dt = solve_ga(D, T=T, pm=pm, C=C, grid_epochs=ge, use_merge=merge)
     opt = OPT.get(name)
     gap = f"{(best/opt-1)*100:.3f}%" if opt else "?"
-    print(f"{name}: n={D.shape[0]} T={T} pm={pm} C={C} ge={ge} best={best} "
+    print(f"{name}: n={D.shape[0]} T={T} pm={pm} C={C} ge={ge} merge={merge} best={best} "
           f"opt={opt} gap={gap} perm_ok={perm_ok} [{dt:.1f}s]")
