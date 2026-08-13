@@ -1,0 +1,288 @@
+"""Populacyjny memetyk GA na GPU (Numba, cooperative groups).
+
+Rozszerza ILS o strukturę populacji jak w oryginale:
+- pm OSOBNIKÓW na wątek (wyspa); OX crossover między nimi + selekcja elitarna;
+- KOLONIE: T wątków w C koloniach; migracja w obrębie kolonii (adopcja best
+  sąsiada) — race-free: bufor migranta + dwie fazy grid.sync;
+- lokalny memetyk: 2-opt ⇄ Or-opt na listach sąsiadów; double-bridge na najsłabszym.
+
+Trasy płasko: R[M, n], M=T*pm; wątek gid ma osobniki [gid*pm .. gid*pm+pm).
+P/scratch/existed/states — per wątek (gid), reużywane sekwencyjnie po osobnikach.
+"""
+import os
+import numpy as np
+from numba import cuda, int32
+from prng_dev import rnd01
+
+
+@cuda.jit(device=True, inline=True)
+def route_len(D, R, ri, n):
+    s = 0
+    for i in range(n - 1):
+        s += D[R[ri, i], R[ri, i + 1]]
+    s += D[R[ri, n - 1], R[ri, 0]]
+    return s
+
+
+@cuda.jit(device=True, inline=True)
+def two_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, max_sweeps):
+    for _sweep in range(max_sweeps):
+        improved = False
+        for i in range(n - 1):
+            a = R[ri, i]; b = R[ri, i + 1]; dab = D[a, b]
+            for kk in range(Knl):
+                c = neigh[a, kk]; dac = D[a, c]
+                if dac >= dab:
+                    break
+                j = P[pi, c]
+                if j <= i:
+                    continue
+                jn = j + 1 if j + 1 < n else 0
+                d = R[ri, jn]
+                if dab + D[c, d] - dac - D[b, d] > 0:
+                    lo = i + 1; hi = j
+                    while lo < hi:
+                        cl = R[ri, lo]; ch = R[ri, hi]
+                        R[ri, lo] = ch; R[ri, hi] = cl
+                        P[pi, ch] = lo; P[pi, cl] = hi
+                        lo += 1; hi -= 1
+                    improved = True
+                    b = R[ri, i + 1]; dab = D[a, b]
+        if not improved:
+            break
+
+
+@cuda.jit(device=True, inline=True)
+def relocate_city(R, P, ri, pi, n, src, after):
+    city = R[ri, src]
+    if after > src:
+        for k in range(src, after):
+            R[ri, k] = R[ri, k + 1]; P[pi, R[ri, k]] = k
+        R[ri, after] = city; P[pi, city] = after
+    else:
+        for k in range(src, after + 1, -1):
+            R[ri, k] = R[ri, k - 1]; P[pi, R[ri, k]] = k
+        R[ri, after + 1] = city; P[pi, city] = after + 1
+
+
+@cuda.jit(device=True, inline=True)
+def or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, max_sweeps):
+    for _sweep in range(max_sweeps):
+        improved = False
+        for i in range(n):
+            a = R[ri, i]
+            ip = i - 1 if i > 0 else n - 1
+            isn = i + 1 if i + 1 < n else 0
+            p = R[ri, ip]; s = R[ri, isn]
+            remove_gain = D[p, a] + D[a, s] - D[p, s]
+            if remove_gain <= 0:
+                continue
+            for kk in range(Knl):
+                c = neigh[a, kk]; jc = P[pi, c]
+                if jc == i or jc == ip:
+                    continue
+                jd = jc + 1 if jc + 1 < n else 0
+                d = R[ri, jd]
+                if (D[c, a] + D[a, d] - D[c, d]) - remove_gain < 0:
+                    relocate_city(R, P, ri, pi, n, i, jc)
+                    improved = True
+                    break
+        if not improved:
+            break
+
+
+@cuda.jit(device=True, inline=True)
+def local_search(D, neigh, Knl, R, P, ri, pi, n, sweeps):
+    for i in range(n):
+        P[pi, R[ri, i]] = i
+    for _r in range(3):
+        two_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+        or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+    two_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+
+
+@cuda.jit(device=True, inline=True)
+def double_bridge(R, S, ri, si, n, states, sti):
+    a = 1 + int(rnd01(states, sti) * (n - 3))
+    b = a + 1 + int(rnd01(states, sti) * (n - a - 2))
+    c = b + 1 + int(rnd01(states, sti) * (n - b - 1))
+    if b <= a:
+        b = a + 1
+    if c <= b:
+        c = b + 1
+    if c >= n:
+        c = n - 1
+    idx = 0
+    for i in range(0, a):
+        S[si, idx] = R[ri, i]; idx += 1
+    for i in range(b, c):
+        S[si, idx] = R[ri, i]; idx += 1
+    for i in range(a, b):
+        S[si, idx] = R[ri, i]; idx += 1
+    for i in range(c, n):
+        S[si, idx] = R[ri, i]; idx += 1
+    for i in range(n):
+        R[ri, i] = S[si, i]
+
+
+@cuda.jit(device=True, inline=True)
+def ox_crossover(R, rp1, rp2, CH, rc, existed, pi, n, states, sti):
+    """Order Crossover: segment [cut,cut+L) z rodzica1, reszta w kolejności rodzica2."""
+    cut = int(rnd01(states, sti) * n)
+    L = int(rnd01(states, sti) * 0.4 * n) + int(0.3 * n) + 1
+    if L >= n:
+        L = n - 1
+    for i in range(n):
+        existed[pi, i] = 0
+    for k in range(L):
+        pos = (cut + k) % n
+        city = R[rp1, pos]
+        CH[rc, pos] = city
+        existed[pi, city] = 1
+    fillpos = (cut + L) % n
+    for k in range(n):
+        pos2 = (cut + L + k) % n
+        city = R[rp2, pos2]
+        if existed[pi, city] == 0:
+            CH[rc, fillpos] = city
+            existed[pi, city] = 1
+            fillpos = (fillpos + 1) % n
+
+
+@cuda.jit
+def evolve_ga(D, neigh, Knl, R, CH, migrant, P, scratch, existed, states, rlen, ml,
+              n, T, pm, C, grid_epochs, sweeps, migrate_every):
+    g = cuda.cg.this_grid()
+    gid = cuda.grid(1)
+    if gid < T:
+        base = gid * pm
+        for e in range(pm):
+            rlen[base + e] = route_len(D, R, base + e, n)
+    g.sync()
+    colsize = T // C
+    for ge in range(grid_epochs):
+        if gid < T:
+            base = gid * pm
+            # 1. local search rodziców
+            for e in range(pm):
+                local_search(D, neigh, Knl, R, P, base + e, gid, n, sweeps)
+                rlen[base + e] = route_len(D, R, base + e, n)
+            # 2. OX + LS dziecka + steady-state (dziecko wypiera najsłabszego)
+            for e in range(pm):
+                e2 = e + 1 if e + 1 < pm else 0
+                ox_crossover(R, base + e, base + e2, CH, base + e, existed, gid, n, states, gid)
+                local_search(D, neigh, Knl, CH, P, base + e, gid, n, sweeps)
+                clen = route_len(D, CH, base + e, n)
+                worst = 0; wl = rlen[base]
+                for w in range(1, pm):
+                    if rlen[base + w] > wl:
+                        wl = rlen[base + w]; worst = w
+                if clen < wl:
+                    for i in range(n):
+                        R[base + worst, i] = CH[base + e, i]
+                    rlen[base + worst] = clen
+            # 3. perturbacja najsłabszego (dywersyfikacja)
+            worst = 0; wl = rlen[base]
+            for w in range(1, pm):
+                if rlen[base + w] > wl:
+                    wl = rlen[base + w]; worst = w
+            double_bridge(R, scratch, base + worst, gid, n, states, gid)
+            rlen[base + worst] = route_len(D, R, base + worst, n)
+        g.sync()
+        # --- migracja w kolonii: faza 1 zbierz migranta (czyta cudze, stabilne) ---
+        do_mig = (ge + 1) % migrate_every == 0
+        if gid < T and do_mig:
+            cstart = (gid // colsize) * colsize
+            other = cstart + int(rnd01(states, gid) * colsize)
+            obase = other * pm
+            ob = 0; obl = rlen[obase]
+            for e in range(1, pm):
+                if rlen[obase + e] < obl:
+                    obl = rlen[obase + e]; ob = e
+            for i in range(n):
+                migrant[gid, i] = R[obase + ob, i]
+            ml[gid] = obl
+        g.sync()
+        # --- faza 2: zastosuj (pisze tylko swoje) ---
+        if gid < T and do_mig:
+            base = gid * pm
+            worst = 0; wl = rlen[base]
+            for w in range(1, pm):
+                if rlen[base + w] > wl:
+                    wl = rlen[base + w]; worst = w
+            if ml[gid] < wl:
+                for i in range(n):
+                    R[base + worst, i] = migrant[gid, i]
+                rlen[base + worst] = ml[gid]
+        g.sync()
+
+
+def knn(D, Knl):
+    n = D.shape[0]
+    neigh = np.empty((n, Knl), np.int32)
+    for c in range(n):
+        row = D[c]
+        idx = np.argpartition(row, Knl + 1)[:Knl + 1]
+        idx = idx[idx != c]
+        idx = idx[np.argsort(row[idx])][:Knl]
+        neigh[c] = idx
+    return neigh
+
+
+def solve_ga(D, T=256, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
+             migrate_every=10, tpb=128, seed=1):
+    from tsp_io import nn_tour
+    n = D.shape[0]
+    M = T * pm
+    nn = nn_tour(D, 0).astype(np.int32)
+    neigh = knn(D, Knl)
+    rng = np.random.default_rng(seed)
+    # dywersyfikacja: 1 osobnik/wyspa = NN (szybka zbieżność), reszta losowe permutacje
+    R = np.empty((M, n), np.int32)
+    for gid in range(T):
+        R[gid * pm] = nn
+        for e in range(1, pm):
+            R[gid * pm + e] = rng.permutation(n).astype(np.int32)
+    states = rng.integers(-2**31, 2**31 - 1, size=(T, 5), dtype=np.int32)
+    states[states == 0] = 1
+    d_D = cuda.to_device(D); d_neigh = cuda.to_device(neigh)
+    d_R = cuda.to_device(R); d_CH = cuda.device_array_like(R)
+    d_mig = cuda.device_array((T, n), np.int32)
+    d_P = cuda.device_array((T, n), np.int32)
+    d_scr = cuda.device_array((T, n), np.int32)
+    d_ex = cuda.device_array((T, n), np.int32)
+    d_st = cuda.to_device(states)
+    d_rl = cuda.device_array(M, np.int32); d_ml = cuda.device_array(T, np.int32)
+    blocks = (T + tpb - 1) // tpb
+    import time
+    t0 = time.time()
+    evolve_ga[blocks, tpb](d_D, d_neigh, Knl, d_R, d_CH, d_mig, d_P, d_scr, d_ex,
+                           d_st, d_rl, d_ml, n, T, pm, C, grid_epochs, sweeps, migrate_every)
+    cuda.synchronize()
+    dt = time.time() - t0
+    rl = d_rl.copy_to_host()
+    bi = int(rl.argmin())
+    bestt = d_R.copy_to_host()[bi]
+    perm_ok = sorted(bestt.tolist()) == list(range(n))
+    return int(rl.min()), perm_ok, dt
+
+
+OPT = {"berlin52": 7542, "kroA100": 21282, "pcb3038": 137694}
+
+if __name__ == "__main__":
+    import sys
+    sys.path.insert(0, os.path.dirname(__file__))
+    from tsp_io import load_tsplib, load_txd, dist_matrix
+    path = sys.argv[1] if len(sys.argv) > 1 else "instances/berlin52.tsp"
+    T = int(sys.argv[2]) if len(sys.argv) > 2 else 256
+    ge = int(sys.argv[3]) if len(sys.argv) > 3 else 200
+    pm = int(sys.argv[4]) if len(sys.argv) > 4 else 4
+    C = int(sys.argv[5]) if len(sys.argv) > 5 else 4
+    name = os.path.basename(path).split(".")[0]
+    coords, _ = (load_txd(path) if path.endswith(".txd") else load_tsplib(path))
+    D = dist_matrix(coords)
+    best, perm_ok, dt = solve_ga(D, T=T, pm=pm, C=C, grid_epochs=ge)
+    opt = OPT.get(name)
+    gap = f"{(best/opt-1)*100:.3f}%" if opt else "?"
+    print(f"{name}: n={D.shape[0]} T={T} pm={pm} C={C} ge={ge} best={best} "
+          f"opt={opt} gap={gap} perm_ok={perm_ok} [{dt:.1f}s]")
