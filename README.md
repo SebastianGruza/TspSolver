@@ -16,16 +16,41 @@ cooperative kernel*, and the CPU only launches it and reads back the best tour. 
 **no per-epoch GPU↔CPU round-trips** (the Java/Aparapi version returns to the CPU every epoch
 for migration, tabu-list construction and integrity repair).
 
-**Improvements over the Java/Aparapi original**
+### What changed vs the Java / Aparapi version
 
-* **All synchronization on the GPU** — per-epoch barriers via `grid.sync()` (cooperative
-  groups), instead of relaunching the kernel and doing the colony/migration work on the CPU.
-* **Neighbor-list local search** — 2-opt / Or-opt / 3-opt guided by k-nearest-neighbor lists
-  with a position array and pruning (`O(n·K)` per sweep), instead of random-sampling operators.
-* **~16,384 individuals** (4096 islands × 4) vs 2,048 in the original — extra islands are
-  nearly free on an otherwise idle GPU and improve quality.
-* On-GPU **order crossover, colonies + migration, double-bridge** perturbation; TSPLIB
-  distances EUC_2D / GEO / ATT.
+| aspect | Java + Aparapi (original) | Python + CUDA (this port) |
+|:--|:--|:--|
+| **Per-epoch sync** | kernel is relaunched every epoch; the CPU does colony merge, Tabu-BST construction, integrity repair and selection between launches → a **GPU↔CPU round-trip every epoch** | one **persistent cooperative kernel**; a `grid.sync()` barrier per epoch; the CPU only launches once and reads back the best tour — **no round-trips** |
+| **Local search** | random-sampling 2-opt / 3-opt / relocation (best of *K* random index triples) | **KNN neighbor-list** 2-opt / Or-opt / 3-opt with a position array and distance pruning — `O(n·K)` per sweep to a true local optimum |
+| **Population** | 512 threads × 4 = **2 048** individuals (few GPU blocks) | 4 096–8 192 islands × 4 = **16k–32k** individuals (fills the GPU) |
+| **Migration / merge** | on the CPU (gather, sort, power-law resample, merge colonies at time cutoffs) | **on the GPU**, race-free (migrant buffer + two-phase `grid.sync`), with global-merge windows |
+| **Selection** | CPU sorts each colony, power-law fitness sampling | on-GPU **elitist steady-state** (a child displaces the weakest island member) |
+| **Tabu** | CPU balanced BST of recurring tour lengths, ×1.004 penalty | **GPU age-penalty** (a leader that stays too long gets +0.4 % effective length) + a **tabu-immune best-ever tracker** so the true optimum is never lost |
+| **Integrity** | operators can corrupt tours → GPU check + **CPU repair** every epoch | **permutation-preserving** operators — no repair step (validated on every run) |
+| **Init / distances** | partial greedy | nearest-neighbor greedy; TSPLIB **EUC_2D / GEO / ATT** (so reported optima match) |
+
+### Why the results improved so much
+
+Three changes compound:
+
+1. **No CPU round-trips.** The whole evolution — including migration, merge and tabu — stays
+   on the GPU behind `grid.sync()`, so the GPU never idles waiting for the CPU between epochs.
+   In the Java version every epoch returned to the CPU for migration, Tabu-BST and integrity
+   repair; that serialization is gone.
+2. **Neighbor-list local search.** Systematically probing each city's nearest neighbours
+   (with distance pruning) reaches far stronger local optima than random index sampling —
+   cheaply — and, unlike the random `O(n²)`-style sampling, it **scales to n > 3000**.
+3. **Many more islands.** Extra islands fill otherwise-idle SMs almost for free at small *n*
+   (measured **200 W → ~290 W, 100 % utilisation** on an RTX 3090), buying more search per
+   wall-second.
+
+Plus smaller refinements: parents are never re-optimised (they are already local-optimal —
+only new children and perturbed tours get local search), a **double-bridge (4-opt)**
+perturbation gives each island an ILS-style kick, and correct-by-construction operators
+remove the integrity-repair round-trip entirely.
+
+Net effect on the tested instances: **exact optima on small/mid problems, and several-fold
+lower gaps in ~40 % of the original wall-clock time on large ones.**
 
 **Early benchmark (RTX 3090)** — same TSPLIB optima, port vs original:
 
