@@ -74,10 +74,8 @@ def two_opt_full(D, R, gid, n, max_sweeps):
 
 @cuda.jit(device=True, inline=True)
 def two_opt_neighbor(D, neigh, Knl, R, P, gid, n, max_sweeps):
-    """2-opt na listach sąsiadów — O(n·K)/sweep. P=tablica pozycji (P[city]=idx).
-    Pruning: sąsiedzi posortowani rosnąco, przerwij gdy D[a,c]>=D[a,b]."""
-    for i in range(n):
-        P[gid, R[gid, i]] = i
+    """2-opt na listach sąsiadów — O(n·K)/sweep. P=tablica pozycji (P[city]=idx),
+    utrzymywana przez wołającego (local_search). Pruning: przerwij gdy D[a,c]>=D[a,b]."""
     for _sweep in range(max_sweeps):
         improved = False
         for i in range(n - 1):
@@ -127,6 +125,60 @@ def double_bridge(R, S, gid, n, states):
     for i in range(n): R[gid, i] = S[gid, i]
 
 
+@cuda.jit(device=True, inline=True)
+def relocate_city(R, P, gid, n, src, after):
+    """Przenieś miasto z pozycji src tak, by trafiło TUŻ ZA pozycję 'after'."""
+    city = R[gid, src]
+    if after > src:
+        for k in range(src, after):
+            R[gid, k] = R[gid, k + 1]; P[gid, R[gid, k]] = k
+        R[gid, after] = city; P[gid, city] = after
+    else:
+        for k in range(src, after + 1, -1):
+            R[gid, k] = R[gid, k - 1]; P[gid, R[gid, k]] = k
+        R[gid, after + 1] = city; P[gid, city] = after + 1
+
+
+@cuda.jit(device=True, inline=True)
+def or_opt_neighbor(D, neigh, Knl, R, P, gid, n, max_sweeps):
+    """Or-opt (relokacja 1 miasta) na listach sąsiadów. P utrzymywane przez wołającego."""
+    for _sweep in range(max_sweeps):
+        improved = False
+        for i in range(n):
+            a = R[gid, i]
+            ip = i - 1 if i > 0 else n - 1
+            isn = i + 1 if i + 1 < n else 0
+            p = R[gid, ip]; s = R[gid, isn]
+            remove_gain = D[p, a] + D[a, s] - D[p, s]   # oszczędność z usunięcia a
+            if remove_gain <= 0:
+                continue
+            for kk in range(Knl):
+                c = neigh[a, kk]
+                jc = P[gid, c]
+                if jc == i or jc == ip:                 # a już obok c
+                    continue
+                jd = jc + 1 if jc + 1 < n else 0
+                d = R[gid, jd]
+                delta = (D[c, a] + D[a, d] - D[c, d]) - remove_gain
+                if delta < 0:
+                    relocate_city(R, P, gid, n, i, jc)
+                    improved = True
+                    break                                # a się przeniosło
+        if not improved:
+            break
+
+
+@cuda.jit(device=True, inline=True)
+def local_search(D, neigh, Knl, R, P, gid, n, sweeps):
+    """Init P + naprzemiennie 2-opt ⇄ Or-opt do stabilizacji."""
+    for i in range(n):
+        P[gid, R[gid, i]] = i
+    for _r in range(3):
+        two_opt_neighbor(D, neigh, Knl, R, P, gid, n, sweeps)
+        or_opt_neighbor(D, neigh, Knl, R, P, gid, n, sweeps)
+    two_opt_neighbor(D, neigh, Knl, R, P, gid, n, sweeps)
+
+
 @cuda.jit
 def evolve_coop(D, neigh, Knl, cur, best, scratch, P, states, bestlen, n,
                 grid_epochs, ls_iters, migrate_every):
@@ -138,7 +190,7 @@ def evolve_coop(D, neigh, Knl, cur, best, scratch, P, states, bestlen, n,
     g.sync()
     for ge in range(grid_epochs):
         if gid < T:
-            two_opt_neighbor(D, neigh, Knl, cur, P, gid, n, ls_iters)
+            local_search(D, neigh, Knl, cur, P, gid, n, ls_iters)
             clen = route_len(D, cur, gid, n)
             if clen < bestlen[gid]:
                 for i in range(n):
