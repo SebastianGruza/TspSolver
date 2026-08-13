@@ -266,20 +266,24 @@ def solve_ga(D, T=256, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
     return int(rl.min()), perm_ok, dt
 
 
-OPT = {"berlin52": 7542, "kroA100": 21282, "pcb3038": 137694}
+OPT = {"berlin52": 7542, "kroA100": 21282, "pcb3038": 137694,
+       "gr431": 171414, "pcb442": 50778}
 
 if __name__ == "__main__":
     import sys
     sys.path.insert(0, os.path.dirname(__file__))
     from tsp_io import load_tsplib, load_txd, dist_matrix
-    path = sys.argv[1] if len(sys.argv) > 1 else "instances/berlin52.tsp"
+    path = sys.argv[1] if len(sys.argv) > 1 else "instances/gr431.tsp"
     T = int(sys.argv[2]) if len(sys.argv) > 2 else 256
     ge = int(sys.argv[3]) if len(sys.argv) > 3 else 200
     pm = int(sys.argv[4]) if len(sys.argv) > 4 else 4
     C = int(sys.argv[5]) if len(sys.argv) > 5 else 4
     name = os.path.basename(path).split(".")[0]
-    coords, _ = (load_txd(path) if path.endswith(".txd") else load_tsplib(path))
-    D = dist_matrix(coords)
+    if path.endswith(".txd"):
+        coords, _ = load_txd(path); ewt = "EUC_2D"
+    else:
+        coords, _, ewt = load_tsplib(path)
+    D = dist_matrix(coords, ewt)
     best, perm_ok, dt = solve_ga(D, T=T, pm=pm, C=C, grid_epochs=ge)
     opt = OPT.get(name)
     gap = f"{(best/opt-1)*100:.3f}%" if opt else "?"

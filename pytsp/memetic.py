@@ -260,8 +260,11 @@ if __name__ == "__main__":
     T = int(sys.argv[2]) if len(sys.argv) > 2 else 512
     ge = int(sys.argv[3]) if len(sys.argv) > 3 else 800
     name = os.path.basename(path).split(".")[0]
-    coords, _ = (load_txd(path) if path.endswith(".txd") else load_tsplib(path))
-    D = dist_matrix(coords)
+    if path.endswith(".txd"):
+        coords, _ = load_txd(path); ewt = "EUC_2D"
+    else:
+        coords, _, ewt = load_tsplib(path)
+    D = dist_matrix(coords, ewt)
     best, perm_ok, dt = solve(D, T=T, grid_epochs=ge)
     opt = OPT.get(name)
     gap = f"{(best/opt-1)*100:.3f}%" if opt else "?"

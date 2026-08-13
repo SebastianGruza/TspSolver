@@ -91,10 +91,10 @@ if __name__ == "__main__":
     K = int(sys.argv[4]) if len(sys.argv) > 4 else 8
 
     if path.endswith(".txd"):
-        coords, _ = load_txd(path)
+        coords, _ = load_txd(path); ewt = "EUC_2D"
     else:
-        coords, _ = load_tsplib(path)
-    D = dist_matrix(coords); n = D.shape[0]
+        coords, _, ewt = load_tsplib(path)
+    D = dist_matrix(coords, ewt); n = D.shape[0]
     nn = nn_tour(D, 0)
     print(f"n={n}  NN_len={tour_len(D, nn)}  T={T} ITERS={ITERS} K={K}")
 
