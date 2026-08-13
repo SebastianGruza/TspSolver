@@ -156,17 +156,15 @@ def evolve_ga(D, neigh, Knl, R, CH, migrant, P, scratch, existed, states, rlen, 
     gid = cuda.grid(1)
     if gid < T:
         base = gid * pm
-        for e in range(pm):
+        for e in range(pm):                       # jednorazowy LS startu (init nie jest lok-opt)
+            local_search(D, neigh, Knl, R, P, base + e, gid, n, sweeps)
             rlen[base + e] = route_len(D, R, base + e, n)
     g.sync()
     colsize = T // C
     for ge in range(grid_epochs):
         if gid < T:
             base = gid * pm
-            # 1. local search rodziców
-            for e in range(pm):
-                local_search(D, neigh, Knl, R, P, base + e, gid, n, sweeps)
-                rlen[base + e] = route_len(D, R, base + e, n)
+            # (rodzice są już w lok. optimum — NIE re-LS-ujemy; LS tylko nowe kandydaty)
             # 2. OX + LS dziecka + steady-state (dziecko wypiera najsłabszego)
             for e in range(pm):
                 e2 = e + 1 if e + 1 < pm else 0
@@ -187,6 +185,7 @@ def evolve_ga(D, neigh, Knl, R, CH, migrant, P, scratch, existed, states, rlen, 
                 if rlen[base + w] > wl:
                     wl = rlen[base + w]; worst = w
             double_bridge(R, scratch, base + worst, gid, n, states, gid)
+            local_search(D, neigh, Knl, R, P, base + worst, gid, n, sweeps)
             rlen[base + worst] = route_len(D, R, base + worst, n)
         g.sync()
         # --- migracja w kolonii: faza 1 zbierz migranta (czyta cudze, stabilne) ---
