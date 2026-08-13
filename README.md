@@ -6,6 +6,43 @@ This project is not a simple Genetic Algorithm (GA). It is an advanced **Memetic
 
 The application is built in Java and uses the Spring Framework to manage data and provide real-time visualization.
 
+## 🚀 Python + CUDA port (work in progress)
+
+A ground-up rewrite of this solver in **Python + CUDA** (Numba) is under way in
+[`pytsp/`](pytsp/) (branch `python-cuda-port`). It keeps the memetic algorithm but pushes the
+**entire** evolutionary loop — including inter-island migration — onto the GPU using
+**cooperative groups** (`grid.sync()`): the whole run executes inside a single *persistent
+cooperative kernel*, and the CPU only launches it and reads back the best tour. There are
+**no per-epoch GPU↔CPU round-trips** (the Java/Aparapi version returns to the CPU every epoch
+for migration, tabu-list construction and integrity repair).
+
+**Improvements over the Java/Aparapi original**
+
+* **All synchronization on the GPU** — per-epoch barriers via `grid.sync()` (cooperative
+  groups), instead of relaunching the kernel and doing the colony/migration work on the CPU.
+* **Neighbor-list local search** — 2-opt / Or-opt / 3-opt guided by k-nearest-neighbor lists
+  with a position array and pruning (`O(n·K)` per sweep), instead of random-sampling operators.
+* **~16,384 individuals** (4096 islands × 4) vs 2,048 in the original — extra islands are
+  nearly free on an otherwise idle GPU and improve quality.
+* On-GPU **order crossover, colonies + migration, double-bridge** perturbation; TSPLIB
+  distances EUC_2D / GEO / ATT.
+
+**Early benchmark (RTX 3090)** — same TSPLIB optima, port vs original:
+
+| instance | optimal | Java/Aparapi | **Python + CUDA** |
+|:--|:--|:--|:--|
+| berlin52, kroA100 | — | optimal | **optimal (0.000%)** |
+| gr431 (GEO) | 171 414 | 0.64% / 212 s | **0.000% / 85 s** |
+| pr1002 (EUC) | 259 045 | 1.19% / 817 s | **0.191% / 328 s** |
+
+On the tested instances the port already **beats the original in both solution quality and
+wall-clock time** — exact optimum on gr431 in ~40% of the time, and ~6× lower gap on pr1002,
+also in ~40% of the time. Scaling to `n > 3000` and a colony-merge A/B are in progress.
+
+> The Python + CUDA port was developed together with **Claude (Fable 5)** running in **Claude Code**.
+
+---
+
 ## Core Features
 
 * **Hybrid Memetic Algorithm**: Fuses Genetic Algorithm operators (crossover, mutation) with powerful local search heuristics (2-Opt, 3-Opt, Segment Relocation) for rapid optimization.
