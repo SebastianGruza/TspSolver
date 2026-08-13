@@ -207,25 +207,27 @@ def eff(v, a, use_tabu, tabu_age):
 @cuda.jit
 def evolve_ga(D, neigh, Knl, R, CH, migrant, P, scratch, existed, states, rlen, ml,
               age, gbest, gbest_route, n, T, pm, C, grid_epochs, sweeps, migrate_every,
-              use_merge, merge_len, use_tabu, tabu_age):
+              use_merge, merge_len, use_tabu, tabu_age, resume, epoch_offset, total_epochs):
     g = cuda.cg.this_grid()
     gid = cuda.grid(1)
-    if gid < T:
-        base = gid * pm
-        for e in range(pm):                       # jednorazowy LS startu (init nie jest lok-opt)
-            local_search(D, neigh, Knl, R, P, base + e, gid, n, sweeps)
-            rlen[base + e] = route_len(D, R, base + e, n)
-            age[base + e] = 0
-        bi = 0; bl = rlen[base]                   # best-ever wyspy (odporny na tabu)
-        for e in range(1, pm):
-            if rlen[base + e] < bl:
-                bl = rlen[base + e]; bi = e
-        gbest[gid] = bl
-        for i in range(n):
-            gbest_route[gid, i] = R[base + bi, i]
-    g.sync()
+    if resume == 0:                               # init tylko w 1. kawałku (resume=0)
+        if gid < T:
+            base = gid * pm
+            for e in range(pm):                   # jednorazowy LS startu (init nie jest lok-opt)
+                local_search(D, neigh, Knl, R, P, base + e, gid, n, sweeps)
+                rlen[base + e] = route_len(D, R, base + e, n)
+                age[base + e] = 0
+            bi = 0; bl = rlen[base]               # best-ever wyspy (odporny na tabu)
+            for e in range(1, pm):
+                if rlen[base + e] < bl:
+                    bl = rlen[base + e]; bi = e
+            gbest[gid] = bl
+            for i in range(n):
+                gbest_route[gid, i] = R[base + bi, i]
+        g.sync()
     colsize = T // C
     for ge in range(grid_epochs):
+        gge = epoch_offset + ge                   # globalny indeks epoki (dla okien merge)
         if gid < T:
             base = gid * pm
             for e in range(pm):                   # postarzanie osobników
@@ -267,11 +269,11 @@ def evolve_ga(D, neigh, Knl, R, CH, migrant, P, scratch, existed, states, rlen, 
         # --- migracja: faza 1 zbierz migranta (czyta cudze, stabilne) ---
         do_mig = (ge + 1) % migrate_every == 0
         merge_now = False
-        if use_merge == 1:                            # 4 okna merge wokół progów budżetu
-            c0 = grid_epochs // 4; c1 = grid_epochs // 2
-            c2 = (3 * grid_epochs) // 4; c3 = (9 * grid_epochs) // 10
-            if (c0 <= ge < c0 + merge_len) or (c1 <= ge < c1 + merge_len) or \
-               (c2 <= ge < c2 + merge_len) or (c3 <= ge < c3 + merge_len):
+        if use_merge == 1:                            # 4 okna merge wokół progów budżetu (globalnie)
+            c0 = total_epochs // 4; c1 = total_epochs // 2
+            c2 = (3 * total_epochs) // 4; c3 = (9 * total_epochs) // 10
+            if (c0 <= gge < c0 + merge_len) or (c1 <= gge < c1 + merge_len) or \
+               (c2 <= gge < c2 + merge_len) or (c3 <= gge < c3 + merge_len):
                 merge_now = True
         if gid < T and do_mig:
             if merge_now:                             # MERGE: migracja globalna (miesza kolonie)
@@ -321,7 +323,7 @@ def knn(D, Knl):
 
 def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
              migrate_every=10, tpb=128, seed=1, use_merge=0, merge_len=20,
-             use_tabu=0, tabu_age=30):
+             use_tabu=0, tabu_age=30, chunk=0, verbose=False, tag=""):
     # T wysokie = wypełnia GPU (przy n<~1000 to niemal darmowe, mocno poprawia jakość);
     # dla dużych n LS jest droższy per wyspa, więc GPU nasyca się wcześniej.
     from tsp_io import nn_tour
@@ -352,11 +354,20 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50, Knl=10,
     blocks = (T + tpb - 1) // tpb
     import time
     t0 = time.time()
-    evolve_ga[blocks, tpb](d_D, d_neigh, Knl, d_R, d_CH, d_mig, d_P, d_scr, d_ex,
-                           d_st, d_rl, d_ml, d_age, d_gbest, d_gbr, n, T, pm, C,
-                           grid_epochs, sweeps, migrate_every, use_merge, merge_len,
-                           use_tabu, tabu_age)
-    cuda.synchronize()
+    step = grid_epochs if chunk <= 0 else chunk    # chunk<=0 => jeden launch (bez podglądu)
+    done = 0
+    while done < grid_epochs:
+        cs = min(step, grid_epochs - done)
+        evolve_ga[blocks, tpb](d_D, d_neigh, Knl, d_R, d_CH, d_mig, d_P, d_scr, d_ex,
+                               d_st, d_rl, d_ml, d_age, d_gbest, d_gbr, n, T, pm, C,
+                               cs, sweeps, migrate_every, use_merge, merge_len,
+                               use_tabu, tabu_age, 0 if done == 0 else 1, done, grid_epochs)
+        cuda.synchronize()
+        done += cs
+        if verbose and done < grid_epochs:         # podgląd best-so-far po kawałku
+            bsf = int(d_gbest.copy_to_host().min())
+            print(f"    [{tag}] {done}/{grid_epochs} epok  best={bsf}  [{time.time()-t0:.0f}s]",
+                  flush=True)
     dt = time.time() - t0
     rl = d_gbest.copy_to_host()               # wynik z best-ever (odporny na tabu)
     bi = int(rl.argmin())

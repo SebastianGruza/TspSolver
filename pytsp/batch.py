@@ -30,6 +30,7 @@ GE    = int(os.environ.get("GE", 80))
 MERGE = int(os.environ.get("MERGE", 1))
 TABU  = int(os.environ.get("TABU", 0))
 SEED  = int(os.environ.get("SEED", 1))
+CHUNK = int(os.environ.get("CHUNK", 20))          # podgląd best-so-far co CHUNK epok
 INST_DIR = os.environ.get("INST_DIR", "instances")
 OUT   = os.environ.get("OUT", "results_2k.csv")
 
@@ -53,7 +54,8 @@ def main():
             coords, _, ewt = load_tsplib(path)
             D = dist_matrix(coords, ewt); n = D.shape[0]
             best, perm_ok, dt = solve_ga(D, T=T, grid_epochs=GE, use_merge=MERGE,
-                                         use_tabu=TABU, seed=SEED)
+                                         use_tabu=TABU, seed=SEED, chunk=CHUNK,
+                                         verbose=True, tag=name)
             gap = (best / opt - 1.0) * 100.0
             cum = (time.time() - t_start) / 60.0
             row = [name, n, best, opt, f"{gap:.3f}", f"{dt:.1f}", f"{cum:.1f}",
