@@ -31,6 +31,10 @@ MERGE = int(os.environ.get("MERGE", 1))
 TABU  = int(os.environ.get("TABU", 0))
 SEED  = int(os.environ.get("SEED", 1))
 CHUNK = int(os.environ.get("CHUNK", 20))          # podgląd best-so-far co CHUNK epok
+UNIQ  = int(os.environ.get("UNIQ", 0))            # kontrola unikalności per kolonia (kara duplikatów)
+K1 = int(os.environ.get("K1", 0))                 # K per próg budżetu; 0 => auto z n
+K2 = int(os.environ.get("K2", 0))                 #   k1=max(5,n//600) k2=max(10,n//300)
+K3 = int(os.environ.get("K3", 0))                 #   k3=max(15,n//200)
 INST_DIR = os.environ.get("INST_DIR", "instances")
 OUT   = os.environ.get("OUT", "results_2k.csv")
 
@@ -55,7 +59,8 @@ def main():
             D = dist_matrix(coords, ewt); n = D.shape[0]
             best, perm_ok, dt = solve_ga(D, T=T, grid_epochs=GE, use_merge=MERGE,
                                          use_tabu=TABU, seed=SEED, chunk=CHUNK,
-                                         verbose=True, tag=name)
+                                         verbose=True, tag=name, use_uniq=UNIQ,
+                                         k1=K1, k2=K2, k3=K3)
             gap = (best / opt - 1.0) * 100.0
             cum = (time.time() - t_start) / 60.0
             row = [name, n, best, opt, f"{gap:.3f}", f"{dt:.1f}", f"{cum:.1f}",
