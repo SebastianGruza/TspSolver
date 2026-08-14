@@ -252,18 +252,38 @@ def long_edge_relocation(D, neigh, Knl, R, P, ri, pi, n, n_long, max_sweeps):
 
 
 @cuda.jit(device=True, inline=True)
-def local_search(D, neigh, Knl, R, P, ri, pi, n, sweeps):
+def local_search(D, neigh, Knl, R, P, ri, pi, n, sweeps, ls_mode, le_nlong, opt_on):
     for i in range(n):
         P[pi, R[ri, i]] = i
-    for _r in range(2):
+    if ls_mode == 0:                                   # A: klasyczny 2-opt + Or-1 + 3-opt
+        for _r in range(2):
+            two_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+            or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+        three_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+        two_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+        or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+    elif ls_mode == 1:                                 # B: relokacje BEZ 2/3-opt
+        for _r in range(3):
+            or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)    # Or-1
+            or_opt_seg(D, neigh, Knl, R, P, ri, pi, n, 2, sweeps)      # Or-2 (+reversed)
+            or_opt_seg(D, neigh, Knl, R, P, ri, pi, n, 3, sweeps)      # Or-3 (+reversed)
+            if le_nlong > 0:                                           # long-edge bramkowany fazą
+                long_edge_relocation(D, neigh, Knl, R, P, ri, pi, n, le_nlong, 2)
+    elif ls_mode == 2:                                 # C: hybryda — klasyk od startu, relokacje Or-2/3+long-edge RAZEM od opt_start
+        for _r in range(2):                            # szkielet: 2-opt + Or-1 + 3-opt (rozplatanie)
+            two_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+            or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)    # Or-1
+        three_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
         two_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
         or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)        # Or-1
-        or_opt_seg(D, neigh, Knl, R, P, ri, pi, n, 2, sweeps)          # Or-2 (+reversed)
-        or_opt_seg(D, neigh, Knl, R, P, ri, pi, n, 3, sweeps)          # Or-3 (+reversed)
-    long_edge_relocation(D, neigh, Knl, R, P, ri, pi, n, 15, 3)        # napraw najgorsze krawędzie
-    three_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
-    two_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
-    or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+        if opt_on == 1:                                # relokacje dołączają RAZEM w późnej fazie (endgame)
+            or_opt_seg(D, neigh, Knl, R, P, ri, pi, n, 2, sweeps)      # Or-2 (+reversed)
+            or_opt_seg(D, neigh, Knl, R, P, ri, pi, n, 3, sweeps)      # Or-3 (+reversed)
+            if le_nlong > 0:
+                long_edge_relocation(D, neigh, Knl, R, P, ri, pi, n, le_nlong, 2)
+    else:                                              # D: ultra-szybki (rung0) — tylko 2-opt + Or-1
+        two_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
+        or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
 
 
 @cuda.jit(device=True, inline=True)
@@ -312,6 +332,108 @@ def ox_crossover(R, rp1, rp2, CH, rc, existed, pi, n, states, sti):
             CH[rc, fillpos] = city
             existed[pi, city] = 1
             fillpos = (fillpos + 1) % n
+
+
+@cuda.jit(device=True, inline=True)
+def ox_longedge(D, R, rp1, rp2, CH, rc, existed, pi, n, states, sti, topk):
+    """OX celowany: szew segmentu (cut) ląduje TUŻ ZA jedną z topk najdłuższych krawędzi
+    rodzica1 => najgorsza krawędź jest rywana i odbudowywana z rodzica2. topk<=4."""
+    bp = cuda.local.array(16, int32)              # pozycje top-k najdłuższych krawędzi (max 16)
+    bl = cuda.local.array(16, int32)              # ich długości (D int32)
+    for t in range(topk):
+        bp[t] = -1
+        bl[t] = -1
+    for i in range(n):                            # jeden skan + insert-sort na k<=4 (malejąco)
+        j = i + 1 if i + 1 < n else 0
+        d = D[R[rp1, i], R[rp1, j]]
+        t = topk - 1
+        if d > bl[t]:
+            bl[t] = d
+            bp[t] = i
+            while t > 0 and bl[t] > bl[t - 1]:
+                tl = bl[t]; bl[t] = bl[t - 1]; bl[t - 1] = tl
+                tp = bp[t]; bp[t] = bp[t - 1]; bp[t - 1] = tp
+                t -= 1
+    pick = int(rnd01(states, sti) * topk)         # losowo jedna z top-k (dywersyfikacja)
+    if pick >= topk:
+        pick = topk - 1
+    cut = (bp[pick] + 1) % n                       # start segmentu ZA długą krawędzią
+
+    L = int(rnd01(states, sti) * 0.4 * n) + int(0.3 * n) + 1
+    if L >= n:
+        L = n - 1
+    for i in range(n):
+        existed[pi, i] = 0
+    for k in range(L):
+        pos = (cut + k) % n
+        city = R[rp1, pos]
+        CH[rc, pos] = city
+        existed[pi, city] = 1
+    fillpos = (cut + L) % n
+    for k in range(n):
+        pos2 = (cut + L + k) % n
+        city = R[rp2, pos2]
+        if existed[pi, city] == 0:
+            CH[rc, fillpos] = city
+            existed[pi, city] = 1
+            fillpos = (fillpos + 1) % n
+
+
+@cuda.jit(device=True, inline=True)
+def greedy_edge(D, neigh, Knl, R, rp1, rp2, CH, rc, P, p1i, S, p2i, existed, ei, n, states, sti):
+    """Greedy edge recombination: z bieżącego miasta bierz najkrótszą DOSTĘPNĄ krawędź
+    rodzicielską (<=4 kandydatów = sąsiedzi w p1/p2), fallback = najbliższy wolny przez KNN.
+    Sąsiedzi liczeni w locie z tablic pozycji obu rodziców => zero materializacji adjacency."""
+    for i in range(n):
+        P[p1i, R[rp1, i]] = i                      # pozycja miasta w rodzicu1
+        S[p2i, R[rp2, i]] = i                      # pozycja miasta w rodzicu2
+        existed[ei, i] = 0
+    cur = R[rp1, int(rnd01(states, sti) * n) % n]  # losowy start (dywersyfikacja)
+    CH[rc, 0] = cur
+    existed[ei, cur] = 1
+    for step in range(1, n):
+        pp = P[p1i, cur]
+        a = R[rp1, pp - 1] if pp > 0 else R[rp1, n - 1]
+        b = R[rp1, pp + 1] if pp < n - 1 else R[rp1, 0]
+        qq = S[p2i, cur]
+        cc = R[rp2, qq - 1] if qq > 0 else R[rp2, n - 1]
+        dd = R[rp2, qq + 1] if qq < n - 1 else R[rp2, 0]
+        best = -1
+        bestd = 0
+        if existed[ei, a] == 0:
+            best = a; bestd = D[cur, a]
+        if existed[ei, b] == 0:
+            dc = D[cur, b]
+            if best == -1 or dc < bestd:
+                best = b; bestd = dc
+        if existed[ei, cc] == 0:
+            dc = D[cur, cc]
+            if best == -1 or dc < bestd:
+                best = cc; bestd = dc
+        if existed[ei, dd] == 0:
+            dc = D[cur, dd]
+            if best == -1 or dc < bestd:
+                best = dd; bestd = dc
+        if best == -1:                             # fallback: najbliższy wolny przez KNN
+            t = 0
+            while t < Knl:
+                cand = neigh[cur, t]
+                if existed[ei, cand] == 0:
+                    best = cand
+                    t = Knl
+                else:
+                    t += 1
+            if best == -1:                         # KNN wyczerpany -> skan liniowy (rzadkie)
+                j = 0
+                while j < n:
+                    if existed[ei, j] == 0:
+                        best = j
+                        j = n
+                    else:
+                        j += 1
+        CH[rc, step] = best
+        existed[ei, best] = 1
+        cur = best
 
 
 @cuda.jit(device=True, inline=True)
@@ -369,14 +491,18 @@ def sched_k(gge, total, k1, k2, k3):
 def evolve_ga(D, neigh, k1, k2, k3, R, CH, migrant, P, scratch, existed, states, rlen, ml,
               age, gbest, gbest_route, hcount, nbucket, use_uniq,
               n, T, pm, C, grid_epochs, sweeps, migrate_every,
-              use_merge, merge_len, use_tabu, tabu_age, resume, epoch_offset, total_epochs):
+              use_merge, merge_len, use_tabu, tabu_age, resume, epoch_offset, total_epochs,
+              ls_mode, le_start, opt_start, ox_mode, ox_topk):
     g = cuda.cg.this_grid()
     gid = cuda.grid(1)
     if resume == 0:                               # init tylko w 1. kawałku (resume=0)
         if gid < T:
             base = gid * pm
+            t0 = float(epoch_offset) / total_epochs
+            le_init = 15 if (t0 >= le_start) else 0
+            opt_init = 1 if (t0 >= opt_start) else 0
             for e in range(pm):                   # jednorazowy LS startu (init = małe K = k1)
-                local_search(D, neigh, k1, R, P, base + e, gid, n, sweeps)
+                local_search(D, neigh, k1, R, P, base + e, gid, n, sweeps, ls_mode, le_init, opt_init)
                 rlen[base + e] = route_len(D, R, base + e, n)
                 age[base + e] = 0
             bi = 0; bl = rlen[base]               # best-ever wyspy (odporny na tabu)
@@ -391,6 +517,9 @@ def evolve_ga(D, neigh, k1, k2, k3, R, CH, migrant, P, scratch, existed, states,
     for ge in range(grid_epochs):
         gge = epoch_offset + ge                   # globalny indeks epoki (dla okien merge)
         active_k = sched_k(gge, total_epochs, k1, k2, k3)   # adaptacyjne K (3 progi, zależne od n)
+        tphase = float(gge) / total_epochs
+        le_nlong = 15 if (tphase >= le_start) else 0     # long-edge: bramka fazy
+        opt_on = 1 if (tphase >= opt_start) else 0       # 2/3-opt (hybryda): bramka fazy
         if use_uniq == 1:                         # histogram długości per kolonia (unikalność)
             idx = gid
             while idx < C * nbucket:
@@ -410,8 +539,20 @@ def evolve_ga(D, neigh, k1, k2, k3, R, CH, migrant, P, scratch, existed, states,
             # OX + LS dziecka + steady-state (dziecko wypiera efektywnie najsłabszego)
             for e in range(pm):
                 e2 = e + 1 if e + 1 < pm else 0
-                ox_crossover(R, base + e, base + e2, CH, base + e, existed, gid, n, states, gid)
-                local_search(D, neigh, active_k, CH, P, base + e, gid, n, sweeps)
+                if ox_mode == 3:                       # greedy-edge recombination
+                    greedy_edge(D, neigh, active_k, R, base + e, base + e2, CH, base + e,
+                                P, gid, scratch, gid, existed, gid, n, states, gid)
+                else:
+                    use_le_ox = 0                      # ox_mode: 0=klasyk, 1=long-edge, 2=mix 50/50
+                    if ox_mode == 1:
+                        use_le_ox = 1
+                    elif ox_mode == 2 and rnd01(states, gid) < 0.5:
+                        use_le_ox = 1
+                    if use_le_ox == 1:
+                        ox_longedge(D, R, base + e, base + e2, CH, base + e, existed, gid, n, states, gid, ox_topk)
+                    else:
+                        ox_crossover(R, base + e, base + e2, CH, base + e, existed, gid, n, states, gid)
+                local_search(D, neigh, active_k, CH, P, base + e, gid, n, sweeps, ls_mode, le_nlong, opt_on)
                 clen = route_len(D, CH, base + e, n)
                 worst, wl = find_worst(rlen, age, hcount, colid, nbucket, base, pm,
                                        use_tabu, tabu_age)
@@ -427,7 +568,7 @@ def evolve_ga(D, neigh, k1, k2, k3, R, CH, migrant, P, scratch, existed, states,
             worst, wl = find_worst(rlen, age, hcount, colid, nbucket, base, pm,
                                    use_tabu, tabu_age)
             double_bridge(R, scratch, base + worst, gid, n, states, gid)
-            local_search(D, neigh, active_k, R, P, base + worst, gid, n, sweeps)
+            local_search(D, neigh, active_k, R, P, base + worst, gid, n, sweeps, ls_mode, le_nlong, opt_on)
             rlen[base + worst] = route_len(D, R, base + worst, n)
             age[base + worst] = 0
             if rlen[base + worst] < gbest[gid]:
@@ -490,9 +631,17 @@ def knn(D, Knl):
 def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
              migrate_every=10, tpb=128, seed=1, use_merge=0, merge_len=20,
              use_tabu=0, tabu_age=30, chunk=0, verbose=False, tag="", init_mode="kicks",
-             use_uniq=0, k1=0, k2=0, k3=0):
+             use_uniq=0, k1=0, k2=0, k3=0, ls_mode=0, le_start=0.0, opt_start=0.0, ox_mode=0,
+             ox_topk=10, metrics=False):
+    # ls_mode: 0 = klasyczny (2-opt+Or-1+3-opt), 1 = relokacje (Or-1/2/3+long-edge, bez 2/3-opt),
+    #          2 = hybryda (klasyk 2/3-opt od startu + relokacje Or-2/3+long-edge RAZEM od opt_start).
+    # le_start: ułamek budżetu od którego włącza się long-edge wewnątrz bloku relokacji (0.0=od wejścia bloku).
+    # opt_start: ułamek budżetu od którego relokacje Or-2/3+long-edge dołączają do klasyka (0.6 = po 60%).
+    # ox_mode: krzyżowanie — 0 = klasyczny OX, 1 = OX celowany w długie krawędzie, 2 = mix 50/50,
+    #          3 = greedy-edge recombination (edge-preserving, najkrótsza krawędź rodzicielska + KNN fallback).
+    # ox_topk: z ilu najdłuższych krawędzi losować szew w ox_longedge (max 16, domyślnie 10).
     # Adaptacyjne K zależne od n (3 progi budżetu): domyślnie (k*<=0) liczone z n:
-    #   k1=max(5,n//600) do 20% | k2=max(10,n//300) do 60% | k3=max(15,n//200) do końca.
+    #   k1=max(8,n//600) do 20% | k2=max(12,n//300) do 60% | k3=max(15,n//200) do końca.
     # Można nadpisać podając k1/k2/k3 (np. stałe: k1=k2=k3=20).
     # T wysokie = wypełnia GPU (przy n<~1000 to niemal darmowe, mocno poprawia jakość);
     # dla dużych n LS jest droższy per wyspa, więc GPU nasyca się wcześniej.
@@ -500,8 +649,8 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
     n = D.shape[0]
     M = T * pm
     nn = nn_tour(D, 0).astype(np.int32)
-    k1 = max(5, n // 600) if k1 <= 0 else k1         # K zależne od n (3 progi budżetu)
-    k2 = max(10, n // 300) if k2 <= 0 else k2
+    k1 = max(8, n // 600) if k1 <= 0 else k1         # K zależne od n (3 progi budżetu)
+    k2 = max(12, n // 300) if k2 <= 0 else k2
     k3 = max(15, n // 200) if k3 <= 0 else k3
     kmax = max(k1, k2, k3)
     neigh = knn(D, kmax)
@@ -541,16 +690,41 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
     t0 = time.time()
     step = grid_epochs if chunk <= 0 else chunk    # chunk<=0 => jeden launch (bez podglądu)
     done = 0
+    prev_best = None; r_early = None; stagn = 0     # stan metryk (śledzenie zbieżności)
+    if metrics:                                    # nagłówek tabeli metryk (do analizy stall-detekcji)
+        print(f"    [{tag}] ep  best  rel/ep%  r_norm  spread%  cv%  uniq%  stagn  s",
+              flush=True)
     while done < grid_epochs:
         cs = min(step, grid_epochs - done)
         evolve_ga[blocks, tpb](d_D, d_neigh, k1, k2, k3, d_R, d_CH, d_mig, d_P, d_scr, d_ex,
                                d_st, d_rl, d_ml, d_age, d_gbest, d_gbr,
                                d_hcount, NBUCKET, use_uniq, n, T, pm, C,
                                cs, sweeps, migrate_every, use_merge, merge_len,
-                               use_tabu, tabu_age, 0 if done == 0 else 1, done, grid_epochs)
+                               use_tabu, tabu_age, 0 if done == 0 else 1, done, grid_epochs,
+                               ls_mode, le_start, opt_start, ox_mode, ox_topk)
         cuda.synchronize()
         done += cs
-        if verbose and done < grid_epochs:         # podgląd best-so-far + unikalność po kawałku
+        if metrics:                                # bogata tabela metryk co chunk (także ostatni)
+            bsf = int(d_gbest.copy_to_host().min())
+            rl_now = d_rl.copy_to_host()               # długości CAŁEJ populacji (M osobników)
+            mean_p = float(rl_now.mean()); std_p = float(rl_now.std())
+            spread = (mean_p / bsf - 1.0) * 100.0      # rozrzut populacji nad best (maleje przy zbieżności)
+            cv = std_p / mean_p * 100.0                # wsp. zmienności (różnorodność w przestrzeni celu)
+            distinct = (d_hcount.copy_to_host() > 0).sum(axis=1)
+            uniqp = distinct.mean() / (M // C) * 100.0
+            if prev_best is None:
+                rel_ep = 0.0; r_norm = 1.0
+            else:
+                rel_ep = (prev_best - bsf) / prev_best / cs * 100.0   # względna poprawa na epokę [%]
+                if r_early is None and rel_ep > 0:
+                    r_early = rel_ep
+                r_norm = (rel_ep / r_early) if r_early else 0.0
+                stagn = 0 if bsf < prev_best else stagn + 1           # chunki bez poprawy
+            prev_best = bsf
+            print(f"    [{tag}] {done:3d}  {bsf}  {rel_ep:6.3f}  {r_norm:5.2f}  "
+                  f"{spread:6.2f}  {cv:5.2f}  {uniqp:4.0f}  {stagn:3d}  {time.time()-t0:.0f}",
+                  flush=True)
+        elif verbose and done < grid_epochs:       # podgląd best-so-far + unikalność po kawałku
             bsf = int(d_gbest.copy_to_host().min())
             uq = ""
             if use_uniq == 1:
