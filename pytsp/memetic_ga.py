@@ -876,6 +876,7 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
     done = 0
     prev_best = None; r_early = None; stagn = 0     # stan metryk (śledzenie zbieżności)
     mp = 0; cur_K = 8; cur_ops = 0; cur_ox = 0; pending_merge = 0   # stan drabiny: wskaźnik ruchu + operatory
+    merge_cd = 0                                    # cooldown merge: po merge 2 eskalacje bez merge (3. znów pozwala)
     es_best = 1 << 62; noimp = 0; stopped_early = False   # early-stop: 3 kolejne chunki bez poprawy best
     dwell = 0; chunk_idx = 0; rh = []; rung_peak_r = 0.0; stagn_l = 0  # rh=historia best w KROKU, peak, stagnacja
     if metrics and not ladder:
@@ -927,8 +928,12 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
                 ph_gbstall_max = float(gbs_h.max())               # czy KTÓRAŚ wyspa ma aktywną karę tabu (>best_tabu)
                 ph_uniq = float(uniqp); cum_t = time.time() - t0
                 _snap()
+                cands = _cands(cur_ops, cur_K, cur_ox)
+                if merge_cd > 0:                          # cooldown: 2 eskalacje po merge bez próby merge
+                    cands = [cc for cc in cands if cc[0] != "merge"]
+                    merge_cd -= 1
                 best_rew = -1e18; best_cand = None
-                for cand in _cands(cur_ops, cur_K, cur_ox):
+                for cand in cands:
                     _restore()                                   # każdy kandydat startuje z tego samego stanu+RNG
                     tK, tops, tox, tmg = _apply(cand, cur_K, cur_ops, cur_ox)
                     tc0 = time.time()
@@ -956,6 +961,7 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
                     cur_K, cur_ops, cur_ox, mg = _apply(best_cand, cur_K, cur_ops, cur_ox)
                     if mg:
                         pending_merge = 1
+                        merge_cd = 2                              # po merge: następne 2 eskalacje bez merge
                 mp += 1
                 dwell = 0; stagn_l = 0; rh = [bsf]; rung_peak_r = 0.0
             elif escalate and mp < len(LADDER_MOVES):            # FIXED: kolejny ruch z LADDER_MOVES
