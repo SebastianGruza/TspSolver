@@ -50,3 +50,21 @@ NIE triggerować na surowym r_norm.
 - `ls_mode`: 0=klasyk, 1=relokacje, 2=hybryda(2/3-opt→relokacje@opt_start), 3=ultra-fast(2-opt+Or-1)
 - `opt_start`=0.6, `le_start`, `ox_mode` 0/1/2/3, `ox_topk`, K progi max(8,n//600)/max(12,n//300)/max(15,n//200)
 - `metrics=True` → tabela best/rel-ep/r_norm/spread/cv/uniq/stagn co chunk
+
+## 4. Drabina auto-eskalacji + bandyta discovery (15.08)
+
+Kontroler eskalacji: baza 2-opt+Or-1, atomowe ruchy (K+2, +operator, ox, merge) odpalane
+gdy DECELERACJA (świeży spadek < decel_rho * szczytowe tempo kroku). ls_mode=9 = bitmaska ops.
+
+Kluczowe wnioski:
+- Trigger = deceleracja (recent/peak), NIE surowe tempo — uniq% laguje, opóźniało climb ~2x.
+- Kolejność ruchów DOMINUJE nad granularnością: high-value first (3-opt->Or2->Or3->long-edge
+  ->greedy-edge) bije K-bumpy-first o ~12k jednostek w tym samym czasie.
+- Auto-drabina (reorder) rl5934 final = 567893 = **2.131%** — bije hybrydę (2.246%),
+  OX-mix50 (2.169%) I oryginal Javy (2.17%). Bez strojenia per instancja. Cena: wolno
+  (dochodzi ~24700s; hybryde-level ~570k osiaga juz ~2660s).
+
+Bandyta (discovery-mode): na eskalacji ROLLOUT — snapshot (R,rlen,gbest,gbr,age,RNG),
+proba kazdego kandydata (trial_chunks) z tego samego startu, log (stan,ruch,burst,dt,
+reward=burst/dt) do SQLite results/ladder_trials.db, commit zwyciezcy. Przetestowane kroA100
+(perm_ok, 18 krotek). Offline agregacja (disc_agg.py) -> statystycznie najlepsza kolejnosc.
