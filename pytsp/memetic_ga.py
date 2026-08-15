@@ -657,7 +657,9 @@ def evolve_ga(D, neigh, k1, k2, k3, R, CH, migrant, P, scratch, existed, states,
                     gbest_route[gid, i] = R[base + worst, i]
         g.sync()
         # --- migracja: faza 1 zbierz migranta (czyta cudze, stabilne) ---
-        do_mig = (ge + 1) % migrate_every == 0
+        # gge (globalne) nie ge (lokalne) — inaczej w chunkach <migrate_every migracja NIGDY nie fire.
+        # force_merge wymusza do_mig => kandydat "merge" w trialu faktycznie merge'uje.
+        do_mig = ((gge + 1) % migrate_every == 0) or (force_merge == 1)
         merge_now = False
         if force_merge == 1:                          # DRABINA: merge wymuszony przez kontroler (cały chunk)
             merge_now = True
