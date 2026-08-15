@@ -91,15 +91,20 @@ Koszt: ~liczba_kandydatów × trial_chunks epok na eskalację. Discovery jest dr
 ## 5. Tabu inkumbenta (anty-zakotwiczenie)  [zaimpl.]
 
 Najlepszy osobnik w populacji, mając najniższą długość, prawie nigdy nie jest wypierany →
-**kotwiczy populację**. Fix:
+**kotwiczy populację**. Rozwiązanie (proste, jak w oryginale Aparapi):
 - `gbstall[gid]` = epoki odkąd best wyspy się nie poprawił (reset przy poprawie).
-- Gdy `gbstall > best_tabu` (=5, 1 chunk), inkumbent (`rlen == gbest`) dostaje **rosnącą karę**
-  `(len//250)·min(gbstall−5, 16)` w selekcji → wchodzi na „najgorszego", zostaje wyparty →
-  populacja eksploruje dalej.
-- **Prawdziwy best żyje osobno w `gbest_route`** z właściwą długością (immune) — karanie w
-  populacji nie grozi utratą rozwiązania.
+- Gdy `gbstall > best_tabu` (=5, 1 chunk), inkumbent (`rlen == gbest`) dostaje w selekcji karę
+  **×1.004** (efektywna długość ×1.004). To **samoregulacja**: inkumbent staje się „najgorszym"
+  tylko gdy cała populacja zbiegła do **<0.4% od best** (wtedy potrząśnięcie jest pożądane — best
+  zostaje wyparty/perturbowany → eksploracja z jego sąsiedztwa → nowe besty). Przy różnorodności
+  (inne >0.4% gorsze) best **zostaje** — nie ma katastrofalnej utraty.
+- **Prawdziwy best żyje osobno w `gbest_route`** (immune, właściwa długość) — rekord na wynik.
 
-Komplementarne do dwóch istniejących kar tabu: wieku (`age >= tabu_age`) i duplikatu długości.
+**Dlaczego ×1.004, nie rosnąca kara / reinjekcja:** agresywna kara (rosnąca) wypierała *jedynego*
+best nawet bez zbieżności → populacja oddryfowywała, discovery traciło sygnał (bursty=0), jakość
+spadała. ×1.004 jest łagodne i samoreguluje — bije jakościowo (pr439: 0.061% vs 0.121% bez tabu)
+i zachowuje sygnał operatorów. Anty-dominację (wiele kopii best) i tak łapie kara duplikatu
+(uniqueness). Komplementarne do kar tabu: wieku (`age >= tabu_age`) i duplikatu długości.
 
 ## 6. Operatory  [zaimpl.]
 

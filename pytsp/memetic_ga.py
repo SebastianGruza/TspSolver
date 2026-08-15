@@ -529,17 +529,15 @@ def eff2(v, a, dup, use_tabu, tabu_age):
 def find_worst(rlen, age, hcount, col, nbucket, base, pm, use_tabu, tabu_age,
                gbest_val, gbstall, best_tabu):
     """Indeks + efektywna długość NAJSŁABSZEGO (kara wieku + duplikatu + INKUMBENTA).
-    Inkumbent (rlen==gbest wyspy) trzymający best dłużej niż best_tabu (1 chunk) dostaje
-    ROSNĄCĄ karę => populacja schodzi z zakotwiczenia (prawdziwy best żyje w gbest_route)."""
+    Inkumbent (rlen==gbest wyspy) trzymający best dłużej niż best_tabu (1 chunk) dostaje karę
+    ×1.004 (jak Aparapi) — samoregulującą: staje się 'najgorszym' tylko gdy populacja zbiegła
+    do <0.4% od best (wtedy potrząśnięcie pożądane), przy różnorodności best zostaje."""
     worst = 0; wl = -1
     for w in range(pm):
         dw = hcount[col, rlen[base + w] % nbucket]
         le = eff2(rlen[base + w], age[base + w], dw, use_tabu, tabu_age)
         if use_tabu == 1 and rlen[base + w] == gbest_val and gbstall > best_tabu:
-            m = gbstall - best_tabu                   # rosnąca z liczbą epok ponad 1 chunk
-            if m > 16:
-                m = 16
-            le += (rlen[base + w] // 250) * m
+            le = int(le * 1.004)                      # prosta kara multiplikatywna (jak Aparapi) — samoregulująca
         if le > wl:
             wl = le; worst = w
     return worst, wl
