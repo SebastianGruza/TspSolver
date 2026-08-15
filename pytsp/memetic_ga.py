@@ -868,6 +868,8 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
                       "feat_nn REAL, feat_cv REAL, feat_skew REAL, feat_kurt REAL, feat_far REAL, "
                       "feat_clark REAL, feat_gridcv REAL, feat_aspect REAL, feat_tight REAL, "
                       "seed INT, terminated_by TEXT, final_step INT, final_best INT, total_time REAL)")
+        dbcur.execute("CREATE TABLE IF NOT EXISTS ladder_states (instance TEXT, seed INT, step INT, "
+                      "n INT, gbest INT, route BLOB, colony_routes BLOB)")   # ZRODLO dla GNN: trasa best + best kolonii
     import time
     t0 = time.time()
     step = grid_epochs if chunk <= 0 else chunk    # chunk<=0 => jeden launch (bez podglądu)
@@ -928,6 +930,16 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
                 ph_gbstall_max = float(gbs_h.max())               # czy KTÓRAŚ wyspa ma aktywną karę tabu (>best_tabu)
                 ph_uniq = float(uniqp); cum_t = time.time() - t0
                 _snap()
+                try:                                  # ZRODLO dla GNN: best-route + best C kolonii (per decyzja, PRZED rolloutem)
+                    gb_h = d_gbest.copy_to_host(); gbr_h = d_gbr.copy_to_host()
+                    colsize = T // C
+                    st_route = gbr_h[int(gb_h.argmin())].astype(np.int32)
+                    st_cols = np.stack([gbr_h[c * colsize + int(gb_h[c * colsize:(c + 1) * colsize].argmin())]
+                                        for c in range(C)]).astype(np.int32)
+                    dbcur.execute("INSERT INTO ladder_states VALUES (?,?,?,?,?,?,?)",
+                                  (tag, seed, mp, n, int(bsf), st_route.tobytes(), st_cols.tobytes()))
+                except Exception:
+                    pass
                 cands = _cands(cur_ops, cur_K, cur_ox)
                 if merge_cd > 0:                          # cooldown: 2 eskalacje po merge bez próby merge
                     cands = [cc for cc in cands if cc[0] != "merge"]
