@@ -1,7 +1,10 @@
-.venv/
+# generowane dane / wyniki discovery (nie wersjonujemy)
+results/*.db
+results/*.db-journal
+results/*.db-wal
+results/*.db-shm
+results_*.csv
+
+# python cache
 __pycache__/
 *.pyc
-instances/
-out/
-*.log
-cudashim/
