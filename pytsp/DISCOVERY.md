@@ -51,12 +51,16 @@ za tempem — bramkowanie na nich opóźniało climb ~2×. Deceleracja (recent/p
 poprawnie. `best_tabu`/force jako anty-deadlock: jeśli krok nie daje ŻADNEJ poprawy przez `d_max`
 chunków, i tak eskaluj.
 
-## 3. Early-stop  [zaimpl.]
+## 3. Early-stop (świadomy tabu)  [zaimpl.]
 
-Bieg kończy się gdy **3 kolejne chunki bez poprawy best** (`noimp >= 3`), z górnym capem `ge`.
-Powód: małe instancje zbiegają szybko (kończą tanio), a te z potencjałem (np. pr1002) jadą
-**do zbieżności**, nie ucięte sztywnym budżetem. Rozwiązuje napięcie „szybko dla małych" vs
-„nie ucinać potencjału".
+Bieg kończy się gdy **3 kolejne chunki bez poprawy best** (`noimp >= 3`) **I tabu inkumbenta
+wyczerpane** (`max gbstall > best_tabu + 16`), z górnym capem `ge`.
+Powód pierwszego warunku: małe instancje zbiegają szybko (kończą tanio), a te z potencjałem
+(np. pr1002) jadą **do zbieżności**, nie ucięte sztywnym budżetem.
+Powód sprzężenia z tabu: sam `noimp>=3` (~15 epok) ubijał bieg **zanim tabu zdążyło** wyprzeć
+inkumbenta i pozwolić populacji znaleźć poprawę (kara rośnie do maksa dopiero przy `gbstall=21`,
+potem eviction+eksploracja). Więc stop czeka aż tabu **da pełną szansę** — kara na maksie,
+inkumbent wyparty, eksploracja bez skutku. Przy `use_tabu=0` degeneruje do samego `noimp>=3`.
 
 ## 4. Bandyta discovery (greedy rollout)  [zaimpl.]
 

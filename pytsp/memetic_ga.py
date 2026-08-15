@@ -93,8 +93,8 @@ def or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, max_sweeps):
 
 @cuda.jit(device=True, inline=True)
 def relocate_segment(R, P, ri, pi, n, i, L, after, rev):
-    """Przenieś segment [i, i+L) tuż ZA pozycję 'after' (poza segmentem). rev=1 => odwrócony. L<=3."""
-    seg = cuda.local.array(3, int32)
+    """Przenieś segment [i, i+L) tuż ZA pozycję 'after' (poza segmentem). rev=1 => odwrócony. L<=16."""
+    seg = cuda.local.array(16, int32)
     for t in range(L):
         seg[t] = R[ri, i + t]
     if rev == 1:
@@ -152,6 +152,62 @@ def or_opt_seg(D, neigh, Knl, R, P, ri, pi, n, L, max_sweeps):
                 improved = True
         if not improved:
             break
+
+
+@cuda.jit(device=True, inline=True)
+def swap_neighbor(D, neigh, Knl, R, P, ri, pi, n, n_long, max_sweeps):
+    """Vertex swap CELOWANY w długie krawędzie (z Javy: mutVertexSwap, ulepszone): miasto do zamiany =
+    koniec jednej z n_long najdłuższych krawędzi; zamień z bliskim sąsiadem (KNN). 4 krawędzie, bez rev.
+    O(n) na znalezienie długich + O(n_long·K) na swapy. n_long<=16."""
+    bp = cuda.local.array(16, int32)                     # pozycje top-n_long najdłuższych krawędzi
+    bl = cuda.local.array(16, int32)
+    for _sweep in range(max_sweeps):
+        for t in range(n_long):                          # znajdź n_long najdłuższych krawędzi (i -> i+1)
+            bp[t] = -1; bl[t] = -1
+        for i in range(n):
+            j = i + 1 if i + 1 < n else 0
+            d = D[R[ri, i], R[ri, j]]
+            t = n_long - 1
+            if d > bl[t]:
+                bl[t] = d; bp[t] = i
+                while t > 0 and bl[t] > bl[t - 1]:
+                    tl = bl[t]; bl[t] = bl[t - 1]; bl[t - 1] = tl
+                    tp = bp[t]; bp[t] = bp[t - 1]; bp[t - 1] = tp
+                    t -= 1
+        improved = False
+        for t in range(n_long):                          # swap miasta z długiej krawędzi z bliskim sąsiadem
+            i = bp[t]
+            if i <= 0 or i >= n - 1:                      # brzegi/wrap => pomiń
+                continue
+            a = R[ri, i]; ap = R[ri, i - 1]; an = R[ri, i + 1]
+            best_delta = 0; best_j = -1
+            for kk in range(Knl):
+                c = neigh[a, kk]; jj = P[pi, c]
+                if jj <= i + 1 and jj >= i - 1:           # ta sama/sąsiednia poz. => pomiń
+                    continue
+                if jj == 0 or jj == n - 1:
+                    continue
+                cp = R[ri, jj - 1]; cn = R[ri, jj + 1]
+                old = D[ap, a] + D[a, an] + D[cp, c] + D[c, cn]
+                new = D[ap, c] + D[c, an] + D[cp, a] + D[a, cn]
+                delta = new - old
+                if delta < best_delta:
+                    best_delta = delta; best_j = jj
+            if best_j >= 0:
+                jj = best_j; c = R[ri, jj]
+                R[ri, i] = c; P[pi, c] = i
+                R[ri, jj] = a; P[pi, a] = jj
+                improved = True
+        if not improved:
+            break
+
+
+@cuda.jit(device=True, inline=True)
+def or_opt_seg_var(D, neigh, Knl, R, P, ri, pi, n, max_sweeps):
+    """Relokacja segmentów DŁUŻSZYCH (z Javy: mutSegmentRelocation, zmienna długość) — len 5 i 10,
+    pokrywa lukę medium/long ponad sztywne Or-2/Or-3. KNN-guided (przez or_opt_seg)."""
+    or_opt_seg(D, neigh, Knl, R, P, ri, pi, n, 5, max_sweeps)
+    or_opt_seg(D, neigh, Knl, R, P, ri, pi, n, 10, max_sweeps)
 
 
 @cuda.jit(device=True, inline=True)
@@ -295,6 +351,10 @@ def local_search(D, neigh, Knl, R, P, ri, pi, n, sweeps, ls_mode, le_nlong, opt_
             three_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
         if (ops & 32) and le_nlong > 0:                            # +long-edge
             long_edge_relocation(D, neigh, Knl, R, P, ri, pi, n, le_nlong, 2)
+        if ops & 64:                                               # +vertex swap celowany w długie krawędzie
+            swap_neighbor(D, neigh, Knl, R, P, ri, pi, n, 10, sweeps)
+        if ops & 128:                                              # +segmenty długie 5/10 (z Javy)
+            or_opt_seg_var(D, neigh, Knl, R, P, ri, pi, n, sweeps)
         if ops != 0:                                               # cleanup gdy dołożono operator
             two_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
             or_opt_neighbor(D, neigh, Knl, R, P, ri, pi, n, sweeps)
@@ -466,14 +526,20 @@ def eff2(v, a, dup, use_tabu, tabu_age):
 
 
 @cuda.jit(device=True, inline=True)
-def find_worst(rlen, age, hcount, col, nbucket, base, pm, use_tabu, tabu_age):
-    """Indeks + efektywna długość NAJSŁABSZEGO (z karą wieku i duplikatu długości)."""
-    d0 = hcount[col, rlen[base] % nbucket]
-    worst = 0
-    wl = eff2(rlen[base], age[base], d0, use_tabu, tabu_age)
-    for w in range(1, pm):
+def find_worst(rlen, age, hcount, col, nbucket, base, pm, use_tabu, tabu_age,
+               gbest_val, gbstall, best_tabu):
+    """Indeks + efektywna długość NAJSŁABSZEGO (kara wieku + duplikatu + INKUMBENTA).
+    Inkumbent (rlen==gbest wyspy) trzymający best dłużej niż best_tabu (1 chunk) dostaje
+    ROSNĄCĄ karę => populacja schodzi z zakotwiczenia (prawdziwy best żyje w gbest_route)."""
+    worst = 0; wl = -1
+    for w in range(pm):
         dw = hcount[col, rlen[base + w] % nbucket]
         le = eff2(rlen[base + w], age[base + w], dw, use_tabu, tabu_age)
+        if use_tabu == 1 and rlen[base + w] == gbest_val and gbstall > best_tabu:
+            m = gbstall - best_tabu                   # rosnąca z liczbą epok ponad 1 chunk
+            if m > 16:
+                m = 16
+            le += (rlen[base + w] // 250) * m
         if le > wl:
             wl = le; worst = w
     return worst, wl
@@ -506,7 +572,7 @@ def evolve_ga(D, neigh, k1, k2, k3, R, CH, migrant, P, scratch, existed, states,
               age, gbest, gbest_route, hcount, nbucket, use_uniq,
               n, T, pm, C, grid_epochs, sweeps, migrate_every,
               use_merge, merge_len, use_tabu, tabu_age, resume, epoch_offset, total_epochs,
-              ls_mode, le_start, opt_start, ox_mode, ox_topk, force_merge, ops):
+              ls_mode, le_start, opt_start, ox_mode, ox_topk, force_merge, ops, gbstall, best_tabu):
     g = cuda.cg.this_grid()
     gid = cuda.grid(1)
     if resume == 0:                               # init tylko w 1. kawałku (resume=0)
@@ -524,6 +590,7 @@ def evolve_ga(D, neigh, k1, k2, k3, R, CH, migrant, P, scratch, existed, states,
                 if rlen[base + e] < bl:
                     bl = rlen[base + e]; bi = e
             gbest[gid] = bl
+            gbstall[gid] = 0                      # licznik stall inkumbenta (epoki bez poprawy best wyspy)
             for i in range(n):
                 gbest_route[gid, i] = R[base + bi, i]
         g.sync()
@@ -548,6 +615,7 @@ def evolve_ga(D, neigh, k1, k2, k3, R, CH, migrant, P, scratch, existed, states,
         if gid < T:
             base = gid * pm
             colid = gid // colsize
+            gbstall[gid] += 1                     # +1 epoka; reset przy poprawie best (niżej)
             for e in range(pm):                   # postarzanie osobników
                 age[base + e] += 1
             # OX + LS dziecka + steady-state (dziecko wypiera efektywnie najsłabszego)
@@ -569,24 +637,24 @@ def evolve_ga(D, neigh, k1, k2, k3, R, CH, migrant, P, scratch, existed, states,
                 local_search(D, neigh, active_k, CH, P, base + e, gid, n, sweeps, ls_mode, le_nlong, opt_on, ops)
                 clen = route_len(D, CH, base + e, n)
                 worst, wl = find_worst(rlen, age, hcount, colid, nbucket, base, pm,
-                                       use_tabu, tabu_age)
+                                       use_tabu, tabu_age, gbest[gid], gbstall[gid], best_tabu)
                 if clen < wl:
                     for i in range(n):
                         R[base + worst, i] = CH[base + e, i]
                     rlen[base + worst] = clen; age[base + worst] = 0
                     if clen < gbest[gid]:
-                        gbest[gid] = clen
+                        gbest[gid] = clen; gbstall[gid] = 0
                         for i in range(n):
                             gbest_route[gid, i] = CH[base + e, i]
             # perturbacja efektywnie najsłabszego + LS
             worst, wl = find_worst(rlen, age, hcount, colid, nbucket, base, pm,
-                                   use_tabu, tabu_age)
+                                   use_tabu, tabu_age, gbest[gid], gbstall[gid], best_tabu)
             double_bridge(R, scratch, base + worst, gid, n, states, gid)
             local_search(D, neigh, active_k, R, P, base + worst, gid, n, sweeps, ls_mode, le_nlong, opt_on, ops)
             rlen[base + worst] = route_len(D, R, base + worst, n)
             age[base + worst] = 0
             if rlen[base + worst] < gbest[gid]:
-                gbest[gid] = rlen[base + worst]
+                gbest[gid] = rlen[base + worst]; gbstall[gid] = 0
                 for i in range(n):
                     gbest_route[gid, i] = R[base + worst, i]
         g.sync()
@@ -620,13 +688,13 @@ def evolve_ga(D, neigh, k1, k2, k3, R, CH, migrant, P, scratch, existed, states,
         if gid < T and do_mig:
             base = gid * pm
             worst, wl = find_worst(rlen, age, hcount, gid // colsize, nbucket, base, pm,
-                                   use_tabu, tabu_age)
+                                   use_tabu, tabu_age, gbest[gid], gbstall[gid], best_tabu)
             if ml[gid] < wl:
                 for i in range(n):
                     R[base + worst, i] = migrant[gid, i]
                 rlen[base + worst] = ml[gid]; age[base + worst] = 0
                 if ml[gid] < gbest[gid]:
-                    gbest[gid] = ml[gid]
+                    gbest[gid] = ml[gid]; gbstall[gid] = 0
                     for i in range(n):
                         gbest_route[gid, i] = migrant[gid, i]
         g.sync()
@@ -649,7 +717,8 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
              use_tabu=0, tabu_age=30, chunk=0, verbose=False, tag="", init_mode="kicks",
              use_uniq=0, k1=0, k2=0, k3=0, ls_mode=0, le_start=0.0, opt_start=0.0, ox_mode=0,
              ox_topk=10, metrics=False, ladder=False, decel_rho=0.4, decel_win=2, d_min=2,
-             merge_period=2, d_max=4, discovery=False, trial_chunks=2, db_path=""):
+             merge_period=2, d_max=4, discovery=False, trial_chunks=2, db_path="", best_tabu=5,
+             coords=None):
     # ls_mode: 0 = klasyczny (2-opt+Or-1+3-opt), 1 = relokacje (Or-1/2/3+long-edge, bez 2/3-opt),
     #          2 = hybryda (klasyk 2/3-opt od startu + relokacje Or-2/3+long-edge RAZEM od opt_start).
     # le_start: ułamek budżetu od którego włącza się long-edge wewnątrz bloku relokacji (0.0=od wejścia bloku).
@@ -720,6 +789,7 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
     d_age = cuda.device_array(M, np.int32)
     d_gbest = cuda.device_array(T, np.int32)
     d_gbr = cuda.device_array((T, n), np.int32)   # best-ever route per wyspa (odporny na tabu)
+    d_gbstall = cuda.to_device(np.zeros(T, np.int32))   # stall inkumbenta (epoki bez poprawy best wyspy)
     NBUCKET = 1 << 16                             # hash-histogram długości per kolonia
     d_hcount = cuda.to_device(np.zeros((C, NBUCKET), np.int32))
     blocks = (T + tpb - 1) // tpb
@@ -728,18 +798,22 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
         snap_R = cuda.device_array_like(d_R); snap_rl = cuda.device_array_like(d_rl)
         snap_age = cuda.device_array_like(d_age); snap_gb = cuda.device_array_like(d_gbest)
         snap_gbr = cuda.device_array_like(d_gbr); snap_st = cuda.device_array_like(d_st)
+        snap_gbstall = cuda.device_array_like(d_gbstall)
 
         def _snap():                              # snapshot stanu device (fair start dla każdego kandydata)
             snap_R.copy_to_device(d_R); snap_rl.copy_to_device(d_rl); snap_age.copy_to_device(d_age)
             snap_gb.copy_to_device(d_gbest); snap_gbr.copy_to_device(d_gbr); snap_st.copy_to_device(d_st)
+            snap_gbstall.copy_to_device(d_gbstall)
 
         def _restore():
             d_R.copy_to_device(snap_R); d_rl.copy_to_device(snap_rl); d_age.copy_to_device(snap_age)
             d_gbest.copy_to_device(snap_gb); d_gbr.copy_to_device(snap_gbr); d_st.copy_to_device(snap_st)
+            d_gbstall.copy_to_device(snap_gbstall)
 
         def _cands(ops, K, ox):                   # dostępne atomowe ruchy w danym stanie
-            cc = []
-            for bit, nm in ((16, "3opt"), (4, "Or2"), (8, "Or3"), (32, "LE")):
+            cc = [("none", 0, "stay")]            # NULL-ACTION: baseline "zostań jak jest" (nie eskaluj)
+            for bit, nm in ((16, "3opt"), (4, "Or2"), (8, "Or3"), (32, "LE"),
+                            (64, "swap"), (128, "segvar")):     # +operatory z Javy: swap, długie segmenty
                 if not (ops & bit):
                     cc.append(("op", bit, nm))
             if K < KMAX_L:
@@ -759,15 +833,41 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
                 K = cand[1]
             elif cand[0] == "ox":
                 ox = cand[1]
-            else:
+            elif cand[0] == "merge":
                 mg = 1
+            # "none" => bez zmian (zostań przy bieżącym configu)
             return K, ops, ox, mg
-        nn1 = D[np.arange(n), neigh[:, 0]].astype(np.float64)     # cecha: rozkład najbliższego sąsiada
-        feat_nn = float(nn1.mean()); feat_cv = float(nn1.std() / (nn1.mean() + 1e-9))
+        nn1 = D[np.arange(n), neigh[:, 0]].astype(np.float64)     # rozkład najbliższego sąsiada
+        mu = nn1.mean(); sd = nn1.std() + 1e-9
+        feat_nn = float(mu); feat_cv = float(sd / mu)
+        feat_skew = float((((nn1 - mu) / sd) ** 3).mean())        # skośność rozkładu krawędzi
+        feat_kurt = float((((nn1 - mu) / sd) ** 4).mean() - 3.0)  # kurtoza
+        farr = D[np.arange(n), neigh[:, -1]].astype(np.float64)   # najdalszy w KNN => rozpiętość skali
+        feat_far = float(farr.mean() / mu)
+        # --- cechy PRZESTRZENNE punktów (numpy, bez sklearn) ---
+        feat_clark = feat_gridcv = feat_aspect = feat_tight = 0.0
+        if coords is not None:
+            xy = np.asarray(coords, dtype=np.float64)
+            xx = xy[:, 0]; yy = xy[:, 1]
+            w = xx.max() - xx.min() + 1e-9; h = yy.max() - yy.min() + 1e-9
+            feat_clark = float(mu / (0.5 * np.sqrt(w * h / n) + 1e-9))   # Clark-Evans: <1 skupione, >1 rozproszone
+            feat_aspect = float(max(w, h) / min(w, h))                   # wydłużenie chmury
+            g = max(2, int(np.sqrt(n) / 2))                             # heterogeniczność gęstości (siatka g×g)
+            Hh, _, _ = np.histogram2d(xx, yy, bins=g)
+            cnt = Hh.flatten()
+            feat_gridcv = float(cnt.std() / (cnt.mean() + 1e-9))
+            feat_tight = float((nn1 < 0.5 * mu).mean())                 # frakcja ciasnych par (proxy skupień)
         dbcon = sqlite3.connect(db_path); dbcur = dbcon.cursor()
         dbcur.execute("CREATE TABLE IF NOT EXISTS ladder_trials (instance TEXT, n INT, "
-                      "feat_nn REAL, feat_cv REAL, seed INT, step INT, state_ops INT, state_K INT, "
-                      "candidate TEXT, burst INT, dt REAL, reward REAL)")
+                      "feat_nn REAL, feat_cv REAL, feat_skew REAL, feat_kurt REAL, feat_far REAL, "
+                      "feat_clark REAL, feat_gridcv REAL, feat_aspect REAL, feat_tight REAL, "
+                      "seed INT, step INT, state_ops INT, state_K INT, state_ox INT, "
+                      "phase_uniq REAL, phase_cv REAL, phase_gbstall REAL, phase_gbstall_max REAL, cum_t REAL, "
+                      "candidate TEXT, burst INT, dt REAL, reward REAL, best INT)")
+        dbcur.execute("CREATE TABLE IF NOT EXISTS ladder_runs (instance TEXT, n INT, "
+                      "feat_nn REAL, feat_cv REAL, feat_skew REAL, feat_kurt REAL, feat_far REAL, "
+                      "feat_clark REAL, feat_gridcv REAL, feat_aspect REAL, feat_tight REAL, "
+                      "seed INT, terminated_by TEXT, final_step INT, final_best INT, total_time REAL)")
     import time
     t0 = time.time()
     step = grid_epochs if chunk <= 0 else chunk    # chunk<=0 => jeden launch (bez podglądu)
@@ -776,6 +876,7 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
     done = 0
     prev_best = None; r_early = None; stagn = 0     # stan metryk (śledzenie zbieżności)
     mp = 0; cur_K = 8; cur_ops = 0; cur_ox = 0; pending_merge = 0   # stan drabiny: wskaźnik ruchu + operatory
+    es_best = 1 << 62; noimp = 0; stopped_early = False   # early-stop: 3 kolejne chunki bez poprawy best
     dwell = 0; chunk_idx = 0; rh = []; rung_peak_r = 0.0; stagn_l = 0  # rh=historia best w KROKU, peak, stagnacja
     if metrics and not ladder:
         print(f"    [{tag}] ep  best  rel/ep%  r_norm  spread%  cv%  uniq%  stagn  s", flush=True)
@@ -799,7 +900,7 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
                                d_hcount, NBUCKET, kuq, n, T, pm, C,
                                cs, sweeps, migrate_every, kum, merge_len,
                                use_tabu, tabu_age, 0 if done == 0 else 1, done, grid_epochs,
-                               kls, kle, kopt, kox, ox_topk, kfm, kops)
+                               kls, kle, kopt, kox, ox_topk, kfm, kops, d_gbstall, best_tabu)
         cuda.synchronize()
         done += cs
         if ladder:                                 # --- KONTROLER eskalacji (deceleracja recent/peak) + log ---
@@ -819,6 +920,12 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
             decel = (r is not None and dwell >= d_min and rung_peak_r > 0 and r_norm < decel_rho)
             escalate = decel or (stagn_l >= d_max)               # deceleracja lub anty-deadlock
             if escalate and discovery:                           # ROLLOUT: próbuj każdego kandydata, loguj burst/czas
+                rl_now = d_rl.copy_to_host()                      # metryki FAZY w punkcie decyzji
+                ph_cv = float(rl_now.std() / (rl_now.mean() + 1e-9) * 100.0)
+                gbs_h = d_gbstall.copy_to_host()
+                ph_gbstall = float(gbs_h.mean())                  # średni stall
+                ph_gbstall_max = float(gbs_h.max())               # czy KTÓRAŚ wyspa ma aktywną karę tabu (>best_tabu)
+                ph_uniq = float(uniqp); cum_t = time.time() - t0
                 _snap()
                 best_rew = -1e18; best_cand = None
                 for cand in _cands(cur_ops, cur_K, cur_ox):
@@ -830,14 +937,18 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
                                            d_hcount, NBUCKET, 1, n, T, pm, C,
                                            trial_chunks, sweeps, migrate_every, 0, merge_len,
                                            use_tabu, tabu_age, 1, done, grid_epochs,
-                                           9, 0.0, 0.0, tox, ox_topk, tmg, tops)
+                                           9, 0.0, 0.0, tox, ox_topk, tmg, tops, d_gbstall, best_tabu)
                     cuda.synchronize()
                     tb = int(d_gbest.copy_to_host().min())
                     burst = bsf - tb; dtc = time.time() - tc0
                     rew = burst / dtc if dtc > 0 else 0.0         # reward = burst / CZAS (cel jakość/czas)
-                    dbcur.execute("INSERT INTO ladder_trials VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                                  (tag, n, feat_nn, feat_cv, seed, mp, cur_ops, cur_K,
-                                   cand[2], int(burst), dtc, rew))
+                    dbcur.execute("INSERT INTO ladder_trials VALUES "
+                                  "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                  (tag, n, feat_nn, feat_cv, feat_skew, feat_kurt, feat_far,
+                                   feat_clark, feat_gridcv, feat_aspect, feat_tight,
+                                   seed, mp, cur_ops, cur_K, cur_ox,
+                                   ph_uniq, ph_cv, ph_gbstall, ph_gbstall_max, cum_t,
+                                   cand[2], int(burst), dtc, rew, int(bsf)))
                     if rew > best_rew:
                         best_rew = rew; best_cand = cand
                 dbcon.commit(); _restore()
@@ -861,8 +972,17 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
             else:
                 dwell += 1
             chunk_idx += 1
+            if bsf < es_best:                       # early-stop: licznik chunków bez poprawy best
+                es_best = bsf; noimp = 0
+            else:
+                noimp += 1
             print(f"    [{tag}] {done:3d} m{mp:2d} K{cur_K:2d} op{cur_ops:2d} x{cur_ox}  {bsf}  "
                   f"{r_norm:4.2f}  {uniqp:4.0f}  {merged}  {time.time()-t0:.0f}", flush=True)
+            # stop dopiero gdy 3 chunki bez poprawy I tabu inkumbenta WYCZERPANE (dało pełną szansę)
+            tabu_done = (use_tabu == 0) or (int(d_gbstall.copy_to_host().max()) > best_tabu + 16)
+            if noimp >= 3 and tabu_done:
+                stopped_early = True
+                break
         elif metrics:                              # bogata tabela metryk co chunk (także ostatni)
             bsf = int(d_gbest.copy_to_host().min())
             rl_now = d_rl.copy_to_host()               # długości CAŁEJ populacji (M osobników)
@@ -892,7 +1012,12 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
                 uq = f" uniq={distinct.mean() / (M // C) * 100:.0f}%"
             print(f"    [{tag}] {done}/{grid_epochs} epok  best={bsf}{uq}  [{time.time()-t0:.0f}s]",
                   flush=True)
-    if discovery:
+    if discovery:                                  # podsumowanie trajektorii (credit assignment dla DP)
+        fbest = int(d_gbest.copy_to_host().min())
+        dbcur.execute("INSERT INTO ladder_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (tag, n, feat_nn, feat_cv, feat_skew, feat_kurt, feat_far,
+                       feat_clark, feat_gridcv, feat_aspect, feat_tight, seed,
+                       "early_stop" if stopped_early else "cap", mp, fbest, time.time() - t0))
         dbcon.commit(); dbcon.close()
     dt = time.time() - t0
     rl = d_gbest.copy_to_host()               # wynik z best-ever (odporny na tabu)
