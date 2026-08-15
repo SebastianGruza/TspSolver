@@ -5,6 +5,13 @@ results/*.db-wal
 results/*.db-shm
 results_*.csv
 
-# python cache
+# python cache / srodowisko
 __pycache__/
 *.pyc
+.venv/
+
+# logi biegow
+results/*.log
+
+# instancje TSPLIB (zewnetrzne, pobierane osobno)
+instances/
