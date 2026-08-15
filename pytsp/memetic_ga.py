@@ -933,6 +933,7 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
                     cands = [cc for cc in cands if cc[0] != "merge"]
                     merge_cd -= 1
                 best_rew = -1e18; best_cand = None
+                ops_full = (cur_ops == 252)                      # 4|8|16|32|64|128 — wszystkie operatory dodane
                 for cand in cands:
                     _restore()                                   # każdy kandydat startuje z tego samego stanu+RNG
                     tK, tops, tox, tmg = _apply(cand, cur_K, cur_ops, cur_ox)
@@ -954,7 +955,8 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
                                    seed, mp, cur_ops, cur_K, cur_ox,
                                    ph_uniq, ph_cv, ph_gbstall, ph_gbstall_max, cum_t,
                                    cand[2], int(burst), dtc, rew, int(bsf)))
-                    if rew > best_rew:
+                    # "stay" nie może wygrać zanim dodano wszystkie operatory (loguj, ale nie kończ eskalacji)
+                    if (cand[0] != "none" or ops_full) and rew > best_rew:
                         best_rew = rew; best_cand = cand
                 dbcon.commit(); _restore()
                 if best_cand is not None:                        # commituj zwycięzcę na stałe
@@ -984,9 +986,10 @@ def solve_ga(D, T=2048, pm=4, C=4, grid_epochs=200, sweeps=50,
                 noimp += 1
             print(f"    [{tag}] {done:3d} m{mp:2d} K{cur_K:2d} op{cur_ops:2d} x{cur_ox}  {bsf}  "
                   f"{r_norm:4.2f}  {uniqp:4.0f}  {merged}  {time.time()-t0:.0f}", flush=True)
-            # stop dopiero gdy 3 chunki bez poprawy I tabu inkumbenta WYCZERPANE (dało pełną szansę)
+            # stop dopiero gdy: 3 chunki bez poprawy I tabu wyczerpane I (discovery) wszystkie operatory dodane
             tabu_done = (use_tabu == 0) or (int(d_gbstall.copy_to_host().max()) > best_tabu + 16)
-            if noimp >= 3 and tabu_done:
+            ops_terminal = (not discovery) or (cur_ops == 252)   # nie kończ zanim ladder spróbuje 3-opt/LE/swap/segvar
+            if noimp >= 3 and tabu_done and ops_terminal:
                 stopped_early = True
                 break
         elif metrics:                              # bogata tabela metryk co chunk (także ostatni)
