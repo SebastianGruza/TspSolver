@@ -70,7 +70,7 @@ def dist_matrix(coords, ewt="EUC_2D"):
         dm = np.ceil(dm / np.sqrt(10.0)).astype(np.int32)      # pseudo-euclidean
         np.fill_diagonal(dm, 0)
         return dm
-    return np.rint(dm).astype(np.int32)                        # EUC_2D: nint
+    return (dm + 0.5).astype(np.int32)                         # EUC_2D: nint = int(d+0.5), TSPLIB half-up (NIE np.rint/banker's)
 
 
 def nn_tour(D, start=0):
