@@ -6,6 +6,84 @@ This project is not a simple Genetic Algorithm (GA). It is an advanced **Memetic
 
 The application is built in Java and uses the Spring Framework to manage data and provide real-time visualization.
 
+## 🚀 Python + CUDA port (work in progress)
+
+A ground-up rewrite of this solver in **Python + CUDA** (Numba) is under way in
+[`pytsp/`](pytsp/) (branch `python-cuda-port`). It keeps the memetic algorithm but pushes the
+**entire** evolutionary loop — including inter-island migration — onto the GPU using
+**cooperative groups** (`grid.sync()`): the whole run executes inside a single *persistent
+cooperative kernel*, and the CPU only launches it and reads back the best tour. There are
+**no per-epoch GPU↔CPU round-trips** (the Java/Aparapi version returns to the CPU every epoch
+for migration, tabu-list construction and integrity repair).
+
+### What changed vs the Java / Aparapi version
+
+| aspect | Java + Aparapi (original) | Python + CUDA (this port) |
+|:--|:--|:--|
+| **Per-epoch sync** | kernel is relaunched every epoch; the CPU does colony merge, Tabu-BST construction, integrity repair and selection between launches → a **GPU↔CPU round-trip every epoch** | one **persistent cooperative kernel**; a `grid.sync()` barrier per epoch; the CPU only launches once and reads back the best tour — **no round-trips** |
+| **Local search** | random-sampling 2-opt / 3-opt / relocation (best of *K* random index triples) | **KNN neighbor-list** 2-opt / Or-opt / 3-opt with a position array and distance pruning — `O(n·K)` per sweep to a true local optimum |
+| **Population** | 512 threads × 4 = **2 048** individuals (few GPU blocks) | 4 096–8 192 islands × 4 = **16k–32k** individuals (fills the GPU) |
+| **Migration / merge** | on the CPU (gather, sort, power-law resample, merge colonies at time cutoffs) | **on the GPU**, race-free (migrant buffer + two-phase `grid.sync`), with global-merge windows |
+| **Selection** | CPU sorts each colony, power-law fitness sampling | on-GPU **elitist steady-state** (a child displaces the weakest island member) |
+| **Tabu** | CPU balanced BST of recurring tour lengths, ×1.004 penalty | **GPU age-penalty** (a leader that stays too long gets +0.4 % effective length) + a **tabu-immune best-ever tracker** so the true optimum is never lost |
+| **Integrity** | operators can corrupt tours → GPU check + **CPU repair** every epoch | **permutation-preserving** operators — no repair step (validated on every run) |
+| **Init / distances** | partial greedy | nearest-neighbor greedy; TSPLIB **EUC_2D / GEO / ATT** (so reported optima match) |
+
+### Why the results improved so much
+
+Three changes compound:
+
+1. **No CPU round-trips.** The whole evolution — including migration, merge and tabu — stays
+   on the GPU behind `grid.sync()`, so the GPU never idles waiting for the CPU between epochs.
+   In the Java version every epoch returned to the CPU for migration, Tabu-BST and integrity
+   repair; that serialization is gone.
+2. **Neighbor-list local search.** Systematically probing each city's nearest neighbours
+   (with distance pruning) reaches far stronger local optima than random index sampling —
+   cheaply — and, unlike the random `O(n²)`-style sampling, it **scales to n > 3000**.
+3. **Many more islands.** Extra islands fill otherwise-idle SMs almost for free at small *n*
+   (measured **200 W → ~290 W, 100 % utilisation** on an RTX 3090), buying more search per
+   wall-second.
+
+Plus smaller refinements: parents are never re-optimised (they are already local-optimal —
+only new children and perturbed tours get local search), a **double-bridge (4-opt)**
+perturbation gives each island an ILS-style kick, and correct-by-construction operators
+remove the integrity-repair round-trip entirely.
+
+Net effect on the tested instances: **exact optima on small/mid problems, and several-fold
+lower gaps in ~40 % of the original wall-clock time on large ones.**
+
+**Early benchmark (RTX 3090)** — same TSPLIB optima, port vs original:
+
+| instance | optimal | Java/Aparapi | **Python + CUDA** |
+|:--|:--|:--|:--|
+| berlin52, kroA100 | — | optimal | **optimal (0.000%)** |
+| gr431 (GEO) | 171 414 | 0.64% / 212 s | **0.000% / 85 s** |
+| pr1002 (EUC) | 259 045 | 1.19% / 817 s | **0.191% / 328 s** |
+
+On the tested instances the port already **beats the original in both solution quality and
+wall-clock time** — exact optimum on gr431 in ~40% of the time, and ~6× lower gap on pr1002,
+also in ~40% of the time.
+
+**A/B validation (controlled, same budget, RTX 3090).** The two optional diversity
+mechanisms were each checked with an A/B run; both give a small, consistent gain on large
+instances and are off by default (switchable):
+
+| mechanism | instance | off | on |
+|:--|:--|:--|:--|
+| **colony merge** — global mixing at 4 budget checkpoints (0.25/0.5/0.75/0.9) | pr1002 (n=1002) | 0.191 % | **0.173 %** |
+| **tabu** — a leader that stays too long in front gets a +0.4 % effective-length penalty in selection (its true best is kept in a tabu-immune tracker) | pcb3038 (n=3038, 300 epochs) | 1.458 % | **1.319 %** |
+
+At the same budget pcb3038 already reaches **1.32 %** vs the original's 2.5–3.1 %. Scaling the
+full `n > 3000` set is in progress.
+
+> The Python + CUDA port was developed together with **Claude (Fable 5)** running in **Claude Code**.
+
+---
+
+# 🧬 The original Java + Aparapi solver
+
+*Everything below documents the original Java + Aparapi implementation that the CUDA port above is based on.*
+
 ## Core Features
 
 * **Hybrid Memetic Algorithm**: Fuses Genetic Algorithm operators (crossover, mutation) with powerful local search heuristics (2-Opt, 3-Opt, Segment Relocation) for rapid optimization.
