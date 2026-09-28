@@ -1,0 +1,44 @@
+czw, 24 wrz 2026, 23:29:35 UTC sweep start: 41 instancji
+23:30 berlin52 n=52 len=7542 opt=7542.0 gap=0.000% wall=26s
+23:30 kroA100 n=100 len=21282 opt=21282.0 gap=0.000% wall=32s
+23:32 fl417 n=417 len=11861 opt=11861.0 gap=0.000% wall=113s
+23:36 gr431 n=431 len=171426 opt=171414.0 gap=0.007% wall=255s
+23:39 pr439 n=439 len=107217 opt=107217.0 gap=0.000% wall=162s
+23:42 pcb442 n=442 len=50792 opt=50778.0 gap=0.028% wall=178s
+23:46 d493 n=493 len=35001 opt=35002.0 gap=-0.003% wall=218s
+23:50 att532 n=532 len=27705 opt=27686.0 gap=0.069% wall=247s
+23:54 ali535 n=535 len=202380 opt=202339.0 gap=0.020% wall=252s
+00:00 u574 n=574 len=36905 opt=36905.0 gap=0.000% wall=354s
+00:05 rat575 n=575 len=6773 opt=6773.0 gap=0.000% wall=300s
+00:08 p654 n=654 len=34643 opt=34643.0 gap=0.000% wall=170s
+00:14 d657 n=657 len=48945 opt=48912.0 gap=0.067% wall=371s
+00:20 gr666 n=666 len=295207 opt=294358.0 gap=0.288% wall=392s
+00:32 u724 n=724 len=42009 opt=41910.0 gap=0.236% wall=697s
+00:40 rat783 n=783 len=8807 opt=8806.0 gap=0.011% wall=466s
+00:50 pr1002 n=1002 len=259558 opt=259045.0 gap=0.198% wall=630s
+00:57 u1060 n=1060 len=224751 opt=224094.0 gap=0.293% wall=400s
+01:11 vm1084 n=1084 len=239371 opt=239297.0 gap=0.031% wall=819s
+01:29 pcb1173 n=1173 len=56982 opt=56892.0 gap=0.158% wall=1075s
+01:48 d1291 n=1291 len=50961 opt=50801.0 gap=0.315% wall=1133s
+01:59 rl1304 n=1304 len=253361 opt=252948.0 gap=0.163% wall=687s
+02:10 rl1323 n=1323 len=270489 opt=270199.0 gap=0.107% wall=685s
+02:38 nrw1379 n=1379 len=57172 opt=56638.0 gap=0.943% wall=1665s
+02:54 fl1400 n=1400 len=20131 opt=20127.0 gap=0.020% wall=921s
+03:04 u1432 n=1432 len=154234 opt=152970.0 gap=0.826% wall=604s
+03:28 fl1577 n=1577 len=22293 opt=22249.0 gap=0.198% wall=1437s
+03:43 d1655 n=1655 len=62298 opt=62128.0 gap=0.274% wall=921s
+04:19 vm1748 n=1748 len=337735 opt=336556.0 gap=0.350% wall=2177s
+04:51 u1817 n=1817 len=57396 opt=57201.0 gap=0.341% wall=1878s
+05:12 rl1889 n=1889 len=317552 opt=316536.0 gap=0.321% wall=1281s
+05:28 d2103 n=2103 len=81679 opt=80450.0 gap=1.528% wall=949s
+05:44 u2152 n=2152 len=66003 opt=64253.0 gap=2.724% wall=974s
+pią, 25 wrz 2026, 06:14:02 UTC sweep2 start (populacja do 5000)
+06:48 u2152 n=2152 mode=population len=64772 opt=64253.0 gap=0.808% wall=2062s
+07:08 u2319 n=2319 mode=population len=236318 opt=234256.0 gap=0.880% wall=1220s
+07:33 pr2392 n=2392 mode=population len=381977 opt=378032.0 gap=1.044% wall=1466s
+08:31 pcb3038 n=3038 mode=population len=139692 opt=137694.0 gap=1.451% wall=3486s
+09:14 fl3795 n=3795 mode=population len=28913 opt=28772.0 gap=0.490% wall=2566s
+11:56 fnl4461 n=4461 mode=population len=186022 opt=182566.0 gap=1.893% wall=9732s
+12:36 rl5915 n=5915 mode=fragments len=575394 opt=565530.0 gap=1.744% wall=2416s
+13:17 rl5934 n=5934 mode=fragments len=565720 opt=556045.0 gap=1.740% wall=2455s
+pią, 25 wrz 2026, 13:17:32 UTC SWEEP_DONE
